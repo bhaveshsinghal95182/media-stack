@@ -314,7 +314,25 @@ Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
   1.5 h, 3 h, 6 h and 12 h after an episode airs, then twice a day for a week,
   until it's found.
 - **Import**: copy a video from `IMPORT_DIR` into the library.
-- **Cleanup**: delete leftover torrents not linked to anything.
+- **Cleanup**:
+  - **Disk:** how much space is left. Downloads pause on their own below 20 GB
+    free and resume above 25 GB. The media shares the laptop's disk, so
+    filling it would break more than the stack.
+  - **Watched · removed automatically:** anything either Jellyfin user has
+    watched is removed 3 days after it was last played, and straight away when
+    space runs low.
+    - Episodes are unmonitored first, so Sonarr won't download them again, and
+      the show stays followed. Movies are deleted completely.
+    - The torrent's data is deleted too. That's what actually frees the space.
+      A season pack waits until all its episodes are watched.
+    - **Favourites in Jellyfin are never removed.** **Keep** marks an item as a
+      favourite.
+    - Change the timing in `compose.yaml` → `library` → `environment` with
+      `JANITOR_GRACE_DAYS`, `JANITOR_PAUSE_BELOW_GB` and
+      `JANITOR_RESUME_ABOVE_GB`. Set `LIBRARY_JANITOR: "0"` to turn it off.
+  - **Leftover torrents:** torrents nothing uses. That covers ones subgate
+    rejected, extra copies of an episode you already have, and old downloads.
+    Tick them and delete. Nothing here is deleted automatically.
 
 **Terminal**:
 
@@ -385,6 +403,10 @@ and run `sudo chown -R "$(id -u):$(id -g)" config`.
 | subgate rejected something that did have English subs | `./media.sh logs subgate` shows what it saw. Releases → pick it manually and it's checked again. Or set `DRY_RUN: "true"` for subgate in `compose.yaml` to only log decisions. |
 | A new anime episode isn't downloading | Following tab: status and watcher activity. Press **Search now**. If nothing is found, no indexer has it yet. |
 | TV can't find Jellyfin | Use `http://<LAN IP>:8096` directly. The laptop and TV must be on the same Wi-Fi. Allow port 8096 in any firewall. |
+| Cleanup says "no Jellyfin API key" or Jellyfin errors | Jellyfin → Dashboard → API Keys → +, put it in `.env` as `JELLYFIN_API_KEY`, then `docker compose up -d library`. |
+| Downloads stopped and Cleanup says "paused" | The disk is nearly full. They resume by themselves above 25 GB free. Free space or watch/remove things. |
+| Sonarr queue: "matched to series by ID. Automatic import is not possible" | The library imports these by itself within ~5 minutes (best copy subgate passed). If the watcher log says "import it by hand", use Sonarr → Activity → Queue → the person icon (Manual Import). |
+| Sonarr shows every episode of a show twice | Sonarr refreshed it twice at once when it was added (the library no longer causes this). Fix: Series → the show → **Refresh & Scan**. Sonarr drops the extra entries and re-links the files. If two files are left for one episode, delete the worse one in Sonarr; its torrent then shows under Leftover torrents. |
 | Wi-Fi gets slow while downloading | Lower the upload limit in qBittorrent (step 5.6). |
 
 Full reset (deletes **all settings** and media, back to step 4):

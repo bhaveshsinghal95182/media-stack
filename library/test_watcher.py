@@ -34,6 +34,9 @@ class FakeSonarr:
             return self.episodes
         if path == "/queue":
             return {"records": self.queue}
+        if path == "/history":
+            return {"records": [{"eventType": "grabbed", "episodeId": 4},
+                                {"eventType": "downloadFailed", "episodeId": 5}]}
         raise AssertionError(path)
 
     def send(self, method, path, body=None, **params):
@@ -134,8 +137,8 @@ class Selection(unittest.TestCase):
 class WatcherCycle(unittest.TestCase):
     def test_search_cleanup_log_and_state_round_trip(self):
         now = AIR_TS + 20 * 60
-        sonarr = FakeSonarr([episode(1), episode(2, hasFile=True), episode(3)],
-                            queue=[{"episodeId": 3}, {}])
+        sonarr = FakeSonarr([episode(1), episode(2, hasFile=True), episode(3), episode(4)],
+                            queue=[{"episodeId": 3}, {}, {"downloadId": "ABC"}])
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "nested", "watcher.json")
             w = watcher.AiringWatcher(lambda: FakeStack(sonarr), path)
@@ -146,7 +149,8 @@ class WatcherCycle(unittest.TestCase):
                 ("/calendar", {"start": "2026-09-27T13:50:00Z",
                                "end": "2026-10-04T13:50:00Z",
                                "includeSeries": "true", "unmonitored": "false"}),
-                ("/queue", {"page": 1, "pageSize": 1000})])
+                ("/queue", {"page": 1, "pageSize": 1000, "includeUnknownSeriesItems": "true"}),
+                ("/history", {"page": 1, "pageSize": 50, "downloadId": "ABC"})])
             self.assertEqual(sonarr.send_calls, [
                 ("POST", "/command", {"name": "EpisodeSearch", "episodeIds": [1]}, {})])
             self.assertEqual(w.state, {"1": {"attempts": 1, "last": now}})

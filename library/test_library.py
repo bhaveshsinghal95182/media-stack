@@ -1,6 +1,8 @@
 import os
 import tempfile
+import json
 import unittest
+import unittest.mock
 
 import core
 
@@ -110,3 +112,167 @@ class WatchlistSend(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeArr:
+    def __init__(self, name, routes, queue):
+        self.name, self.routes, self._queue, self.sent = name, routes, queue, []
+
+    def get(self, path, **params):
+        key = path + ("?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+                      if path in ("/history", "/manualimport") else "")
+        return self.routes[key] if key in self.routes else self.routes[path]
+
+    def queue(self):
+        return self._queue
+
+    def send(self, method, path, body=None, **params):
+        self.sent.append((method, path, body))
+
+
+class FakeQB:
+    def __init__(self, torrents):
+        self._t = torrents
+
+    def torrents(self):
+        return self._t
+
+    def call(self, path, data=None):
+        return json.dumps([{"name": data["hash"] + ".mkv"}]).encode()
+
+
+class FakeVolume:
+    def __init__(self, links=None):
+        self.links = links  # file path -> hardlink count; None = can't read the volume
+
+    def link_counts(self, paths):
+        return None if self.links is None else [self.links.get(p, 1) for p in paths]
+
+
+class FakeStack:
+    def __init__(self, sonarr, qb, radarr=None):
+        self.sonarr, self.qb = sonarr, qb
+        self.radarr = radarr or FakeArr("Radarr", {"/movie": []}, [])
+        self.volume = FakeVolume()
+
+    def kind(self, kind):
+        return core.Kind(self, kind)
+
+
+def torrent(h, tags, progress=1, added=0):
+    return {"hash": h, "tags": tags, "progress": progress, "added_on": added, "name": h,
+            "size": 1, "category": "tv-sonarr", "state": "stoppedUP", "save_path": "/d"}
+
+
+def blocked(h, res):
+    return {"downloadId": h.upper(), "trackedDownloadState": "importBlocked",
+            "quality": {"quality": {"resolution": res}}, "customFormatScore": 0}
+
+
+def grab(h, ep=714):
+    return {"records": [{"eventType": "grabbed", "seriesId": 8, "episodeId": ep, "downloadId": h}]}
+
+
+class Rescue(unittest.TestCase):
+    def make(self, has_file=False):
+        routes = {"/episode/714": {"hasFile": has_file, "seasonNumber": 3, "episodeNumber": 1},
+                  "/episode/678": {"hasFile": False, "seasonNumber": 3, "episodeNumber": 1}}
+        for h in ("aa", "bb", "cc"):
+            routes[f"/history?downloadId={h.upper()}&page=1&pageSize=50"] = grab(h)
+        routes["/manualimport?downloadId=BB&filterExistingFiles=false"] = [
+            {"path": "/data/downloads/tv-sonarr/x.mkv", "episodes": [], "quality": {"q": 1},
+             "languages": [{"id": 8}], "releaseGroup": "G"}]
+        sonarr = FakeArr("Sonarr", routes, [blocked("aa", 720), blocked("bb", 1080),
+                                             blocked("cc", 2160)])
+        qb = FakeQB([torrent("aa", "subgate-ok"), torrent("bb", "subgate-ok"),
+                     torrent("cc", "subgate-rejected")])
+        return FakeStack(sonarr, qb)
+
+    def setUp(self):
+        core._rescue_tried.clear()
+
+    def test_imports_best_passed_copy_once(self):
+        st = self.make()
+        done = core.rescue_imports(st, log=lambda m: None, now=1000)
+        self.assertEqual(done, ["bb"])                      # 1080p beats 720p; 2160p was rejected
+        (method, path, body), = st.sonarr.sent
+        self.assertEqual(body["name"], "ManualImport")
+        f, = body["files"]
+        self.assertEqual((f["seriesId"], f["episodeIds"], f["downloadId"]), (8, [714], "BB"))
+        self.assertEqual(core.rescue_imports(st, log=lambda m: None, now=1500), [])  # no retry yet
+
+    def test_leaves_episodes_that_have_a_file(self):
+        st = self.make(has_file=True)
+        self.assertEqual(core.rescue_imports(st, log=lambda m: None, now=1000), [])
+        self.assertEqual(st.sonarr.sent, [])
+
+    def test_one_import_when_sonarr_holds_the_episode_twice(self):
+        st = self.make()
+        st.qb._t.append(torrent("dd", "subgate-ok"))
+        st.sonarr._queue.append(blocked("dd", 1080))
+        st.sonarr.routes["/history?downloadId=DD&page=1&pageSize=50"] = grab("dd", ep=678)
+        st.sonarr.routes["/manualimport?downloadId=DD&filterExistingFiles=false"] = \
+            st.sonarr.routes["/manualimport?downloadId=BB&filterExistingFiles=false"]
+        self.assertEqual(len(core.rescue_imports(st, log=lambda m: None, now=1000)), 1)
+
+
+class RefreshSeries(unittest.TestCase):
+    class Arr:
+        def __init__(self, polls):
+            self.polls, self.ran = polls, []
+
+        def get(self, path, **params):
+            if path == "/command":
+                return self.polls.pop(0) if self.polls else []
+            return [{"id": 1}]                              # /episode: list loaded
+
+        def run_command(self, body):
+            self.ran.append(body)
+
+    def test_new_series_waits_for_sonarrs_refresh_and_starts_none(self):
+        running = [{"name": "RefreshSeries", "status": "started", "body": {"seriesIds": [8]}}]
+        arr = self.Arr([running, running, []])
+        with unittest.mock.patch("time.sleep"):
+            core.refresh_series(arr, 8, new=True)
+        self.assertEqual(arr.ran, [])
+        self.assertEqual(arr.polls, [])                     # waited until it finished
+
+    def test_existing_series_refreshes_after_others_finish(self):
+        arr = self.Arr([[{"name": "RefreshSeries", "status": "queued", "body": {}}], []])
+        with unittest.mock.patch("time.sleep"):
+            core.refresh_series(arr, 8, new=False)
+        self.assertEqual(arr.ran, [{"name": "RefreshSeries", "seriesId": 8}])
+
+
+class Claimed(unittest.TestCase):
+    def test_rejected_and_duplicates_are_leftovers(self):
+        routes = {"/series": [{"id": 8, "title": "S"}], "/episode/714": {"hasFile": True},
+                  "/history/series": [
+                      {"eventType": "grabbed", "downloadId": "OK", "episodeId": 714},
+                      {"eventType": "downloadFolderImported", "downloadId": "OK", "episodeId": 714},
+                      {"eventType": "grabbed", "downloadId": "DUP", "episodeId": 714},
+                      {"eventType": "grabbed", "downloadId": "REJ", "episodeId": 714},
+                      {"eventType": "grabbed", "downloadId": "OLD", "episodeId": 714},
+                      {"eventType": "grabbed", "downloadId": "NEW", "episodeId": 715}]}
+        routes["/episode/715"] = {"hasFile": False}
+        queue = [blocked("dup", 1080), blocked("rej", 1080), blocked("lost", 1080),
+                 {"downloadId": "NEW", "trackedDownloadState": "downloading"}]
+        torrents = {h: torrent(h, t) for h, t in (("ok", "subgate-ok"), ("dup", "subgate-ok"),
+                    ("rej", "subgate-rejected"), ("old", "subgate-ok"), ("new", ""),
+                    ("lost", "subgate-ok"))}
+        torrents["new"]["progress"] = 0.3
+        st = FakeStack(FakeArr("Sonarr", routes, queue), FakeQB(list(torrents.values())))
+        self.assertEqual(core.claimed_hashes(st, torrents), {"ok", "new"})
+
+    def test_disk_links_beat_history(self):
+        routes = {"/series": [{"id": 8, "title": "S"}], "/history/series": [
+            {"eventType": "downloadFolderImported", "downloadId": "GONE", "episodeId": 1}]}
+        torrents = {h: dict(torrent(h, "subgate-ok"), save_path="/d")
+                    for h in ("gone", "lib", "plain")}
+        st = FakeStack(FakeArr("Sonarr", routes, []), FakeQB(list(torrents.values())))
+        st.volume = FakeVolume({"/d/lib.mkv": 2})
+        # "gone": history says imported, but its library copy was deleted (1 link).
+        # "lib": history was lost, but it's hardlinked into the library.
+        self.assertEqual(core.claimed_hashes(st, torrents), {"lib"})
+        st.volume = FakeVolume(None)  # can't see the disk: trust history
+        self.assertEqual(core.claimed_hashes(st, torrents), {"gone"})

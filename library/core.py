@@ -84,6 +84,8 @@ class Settings:
         self.qbit_pass = env["QBIT_PASSWORD"]
         self.seerr_settings_path = env.get(
             "SEERR_SETTINGS", os.path.join(STACK_ROOT, "config/seerr/settings.json"))
+        self.jellyfin_url = env.get("JELLYFIN_URL", "http://localhost:8096").rstrip("/")
+        self.jellyfin_key = env.get("JELLYFIN_API_KEY", "")  # empty: reuse Seerr's key
 
 
 # --------------------------------------------------------------------------
@@ -129,7 +131,10 @@ class Arr:
                          timeout)
 
     def queue(self) -> list[dict]:
-        return self.get("/queue", page=1, pageSize=1000).get("records", [])
+        # Without this flag the Arrs hide downloads they grabbed but can't match by name
+        # (common for anime), and everything here would think nothing is downloading.
+        unknown = "includeUnknownMovieItems" if self.name == "Radarr" else "includeUnknownSeriesItems"
+        return self.get("/queue", page=1, pageSize=1000, **{unknown: "true"}).get("records", [])
 
     def run_command(self, body: dict, timeout: int = 300) -> None:
         cmd = self.send("POST", "/command", body)
@@ -142,6 +147,20 @@ class Arr:
             if st.get("status") in ("failed", "aborted", "cancelled"):
                 raise LibraryError(f"{self.name} {body['name']} {st['status']}: {st.get('message')}")
         raise LibraryError(f"{self.name} {body['name']} still running after {timeout}s")
+
+
+class Jellyfin:
+    def __init__(self, base: str, key: str):
+        # Jellyfin 10.11 ignores X-Emby-Token; it wants this header.
+        self.base, self.headers = base, {"Authorization": f'MediaBrowser Token="{key}"'}
+
+    def get(self, path: str, **params):
+        q = ("?" + urllib.parse.urlencode(params)) if params else ""
+        return http_json(self.base + path + q, headers=self.headers)
+
+    def send(self, method: str, path: str, **params):
+        q = ("?" + urllib.parse.urlencode(params)) if params else ""
+        return http_json(self.base + path + q, method, headers=self.headers)
 
 
 class QBit:
@@ -209,6 +228,19 @@ class Volume:
             return os.path.exists(path)
         return self._docker("movie", "test", "-e", path, check=False).returncode == 0
 
+    def link_counts(self, paths: list[str]) -> list[int] | None:
+        """Hardlink count of each file, or None if any can't be read."""
+        if not paths:
+            return None
+        if self.local:
+            try:
+                return [os.stat(p).st_nlink for p in paths]
+            except OSError:
+                return None
+        r = self._docker("movie", "stat", "-c", "%h", *paths, check=False)
+        out = r.stdout.split()
+        return [int(n) for n in out] if r.returncode == 0 and len(out) == len(paths) else None
+
     def copy_in(self, kind: str, src: str, dest: str, progress=None) -> None:
         """Copy a file into the volume and verify its size."""
         size = os.path.getsize(src)
@@ -260,6 +292,16 @@ class Stack:
         except (OSError, ValueError):
             self.seerr_settings = {}
         self.seerr_key = self.seerr_settings.get("main", {}).get("apiKey")
+        self._jellyfin = None
+
+    @property
+    def jellyfin(self) -> Jellyfin:
+        if self._jellyfin is None:
+            key = self.settings.jellyfin_key or self.seerr_settings.get("jellyfin", {}).get("apiKey")
+            if not key:
+                raise LibraryError("no Jellyfin API key (set JELLYFIN_API_KEY in .env)")
+            self._jellyfin = Jellyfin(self.settings.jellyfin_url, key)
+        return self._jellyfin
 
     def seerr(self, method: str, path: str):
         return http_json(self.settings.seerr_url + "/api/v1" + path, method,
@@ -403,6 +445,7 @@ def overview(stack: Stack) -> dict:
                 row["episodes"] = f"{st.get('episodeFileCount', 0)}/{st.get('episodeCount', 0)}"
             rows.append(row)
         out["movies" if kind == "movie" else "shows"] = rows
+    claimed = claimed_hashes(stack, torrents)
     orphans = [t for h, t in torrents.items() if h not in claimed]
     out["orphans"] = {"count": len(orphans), "size": sum(t["size"] for t in orphans),
                       "sizeHuman": human(sum(t["size"] for t in orphans))}
@@ -665,6 +708,78 @@ def release_drop(stack: Stack, kind: str, item_id: int, download_ids) -> dict:
 # Following: shows/anime whose new episodes Sonarr grabs as they come out
 # --------------------------------------------------------------------------
 
+RESCUE_RETRY = 3600  # seconds before retrying a rescue that didn't import
+_rescue_tried: dict[str, float] = {}
+
+
+def grab_episodes(stack: Stack, download_id: str) -> tuple[int | None, list[int]]:
+    """Series and episodes Sonarr grabbed a download for, from its own history."""
+    recs = stack.sonarr.get("/history", page=1, pageSize=50,
+                            downloadId=download_id).get("records", [])
+    grabs = [r for r in recs if r.get("eventType") == "grabbed"]
+    series = {r.get("seriesId") for r in grabs}
+    if len(series) != 1:
+        return None, []
+    return series.pop(), sorted({r["episodeId"] for r in grabs if r.get("episodeId")})
+
+
+def rescue_imports(stack: Stack, log=print, now: float | None = None) -> list[str]:
+    """Import finished downloads Sonarr grabbed but won't import because it can't parse
+    the release name ("matched to series by ID" / "Unable to parse").
+
+    The episode comes from Sonarr's own grab history, and only downloads subgate passed
+    are used. One copy per episode: the best quality one. Episodes that already have a
+    file are left alone (their extra copies show up as leftovers in Cleanup).
+    """
+    now = now or time.time()
+    torrents = {t["hash"].lower(): t for t in stack.qb.torrents()}
+    groups: dict[tuple[int, tuple[int, ...]], list[tuple[dict, dict]]] = {}
+    for r in stack.sonarr.queue():
+        d = r.get("downloadId") or ""
+        t = torrents.get(d.lower())
+        if (r.get("trackedDownloadState") != "importBlocked" or not t or t["progress"] < 1
+                or not re.search(r"subgate-(ok|skipped)", t.get("tags") or "")
+                or now - _rescue_tried.get(d, -RESCUE_RETRY) < RESCUE_RETRY):
+            continue
+        series_id, eps = grab_episodes(stack, d)
+        if series_id and eps:
+            groups.setdefault((series_id, tuple(eps)), []).append((r, t))
+    done, taken = [], set()
+    for (series_id, eps), group in groups.items():
+        info = [stack.sonarr.get(f"/episode/{e}") for e in eps]
+        # Numbers, not ids: a series Sonarr holds twice has two ids per episode.
+        nums = {(series_id, i.get("seasonNumber"), i.get("episodeNumber")) for i in info}
+        if any(i.get("hasFile") for i in info) or nums & taken:
+            continue
+        taken |= nums
+        r, t = max(group, key=lambda rt: (
+            ((rt[0].get("quality") or {}).get("quality") or {}).get("resolution") or 0,
+            rt[0].get("customFormatScore") or 0, -rt[1].get("added_on", 0)))
+        for other, _t in group:  # the whole episode waits, so a slow import isn't doubled
+            _rescue_tried[other["downloadId"]] = now
+        files = stack.sonarr.get("/manualimport", downloadId=r["downloadId"],
+                                 filterExistingFiles="false")
+        if len(files) == 1:
+            plan = [(files[0], list(eps))]
+        elif files and all(f.get("episodes") for f in files):  # a pack whose files do parse
+            plan = [(f, [e["id"] for e in f["episodes"]]) for f in files]
+        else:
+            log(f"Sonarr can't place {t['name']} by itself; import it by hand in Sonarr "
+                "(Activity → Queue → Manual Import)")
+            continue
+        stack.sonarr.send("POST", "/command", {
+            "name": "ManualImport", "importMode": "copy",  # copy = hardlink here
+            "files": [{"path": f["path"], "seriesId": series_id, "episodeIds": ids,
+                       "quality": f.get("quality"), "languages": f.get("languages") or [],
+                       "releaseGroup": f.get("releaseGroup"),
+                       "indexerFlags": f.get("indexerFlags") or 0,
+                       "releaseType": f.get("releaseType") or "singleEpisode",
+                       "downloadId": r["downloadId"]} for f, ids in plan]})
+        done.append(t["name"])
+        log(f"Importing {t['name']} (Sonarr couldn't match its name; used its grab history)")
+    return done
+
+
 FOLLOW_MODES = ("new", "season", "all")  # new episodes only / one season + new / everything
 
 
@@ -680,6 +795,35 @@ def _aired(ep: dict, now: float) -> bool:
         return calendar.timegm(time.strptime(air[:19], "%Y-%m-%dT%H:%M:%S")) <= now
     except ValueError:
         return False
+
+
+def _refreshing(arr: Arr, series_id: int) -> bool:
+    for c in arr.get("/command"):
+        body = c.get("body") or {}
+        ids = body.get("seriesIds") or ([body["seriesId"]] if body.get("seriesId") else [])
+        if (c.get("name") == "RefreshSeries" and c.get("status") in ("queued", "started")
+                and (not ids or series_id in ids)):
+            return True
+    return False
+
+
+def refresh_series(arr: Arr, series_id: int, new: bool, timeout: int = 120) -> None:
+    """Load a series' episode list without racing Sonarr's own refresh.
+
+    Sonarr refreshes a series by itself right after it's added. A second RefreshSeries
+    started while one runs makes both insert the episode list, so every episode ends up
+    in Sonarr twice and no release name can be matched (seen 2026-10-04). So: wait for
+    any running refresh, and for a new series that wait is all that's needed.
+    """
+    deadline, start, seen = time.time() + timeout, time.time(), False
+    while time.time() < deadline:
+        if _refreshing(arr, series_id):
+            seen = True
+        elif seen or not new or arr.get("/episode", seriesId=series_id) or time.time() - start > 15:
+            break
+        time.sleep(1)
+    if not new:
+        arr.run_command({"name": "RefreshSeries", "seriesId": series_id})
 
 
 def follow(stack: Stack, tvdb_id: int, mode: str, season: int | None = None) -> dict:
@@ -698,7 +842,7 @@ def follow(stack: Stack, tvdb_id: int, mode: str, season: int | None = None) -> 
         if "anime" in [g.lower() for g in look.get("genres", [])]:
             body["seriesType"] = "anime"
         series = k.arr.send("POST", "/series", body)
-    k.arr.run_command({"name": "RefreshSeries", "seriesId": series["id"]})
+    refresh_series(k.arr, series["id"], new=added)
     series = k.item(series["id"])
     sid = series["id"]
     numbers = [x["seasonNumber"] for x in series.get("seasons", []) if x["seasonNumber"] > 0]
@@ -1006,18 +1150,89 @@ def watchlist_send(stack: Stack, wl, keys: list[tuple[str, int]], log=print) -> 
 # Orphans
 # --------------------------------------------------------------------------
 
-def orphan_list(stack: Stack) -> list[dict]:
-    claimed: set[str] = set()
+def claimed_hashes(stack: Stack, torrents: dict[str, dict]) -> set[str]:
+    """Torrents something still needs: imported into the library, or still on their way.
+
+    Not claimed (so listed as leftovers): torrents subgate rejected, downloads that were
+    grabbed but are no longer in any queue, finished copies an Arr can't import for an
+    episode/movie that already has a file (duplicates), and finished torrents none of
+    whose files is hardlinked into the library any more.
+    """
+    claimed: set[str] = set()       # on its way: in an Arr queue
+    history_claimed: set[str] = set()  # the Arr's history says it was imported
     for kind in ("movie", "show"):
         k = stack.kind(kind)
-        queue = k.arr.queue()
-        claimed |= {r["downloadId"].lower() for r in queue if r.get("downloadId")}
-        for item in k.items():
-            claimed |= k.hashes(item, queue)
+        items = {i["id"]: i for i in k.items()}
+        imported: set[str] = set()
+        grabbed: dict[str, set[int]] = {}
+        for item_id in items:
+            for h in k.history(item_id):
+                d = (h.get("downloadId") or "").lower()
+                if not d:
+                    continue
+                if h.get("eventType") == "downloadFolderImported":
+                    imported.add(d)
+                elif h.get("eventType") == "grabbed":
+                    grabbed.setdefault(d, set()).add(
+                        h.get("movieId") if kind == "movie" else h.get("episodeId"))
+        history_claimed |= imported
+        has_file: dict[int, bool] = {}
+
+        def already_have(d: str) -> bool:
+            if d not in grabbed:
+                # No grab on record (e.g. its episode row was deleted): nothing will
+                # ever import it, since rescue_imports needs the grab too.
+                return True
+            ids = grabbed[d]
+            if not ids or None in ids:
+                return False
+            for i in ids - has_file.keys():
+                if kind == "movie":
+                    has_file[i] = bool((items.get(i) or {}).get("hasFile"))
+                else:
+                    has_file[i] = bool(k.arr.get(f"/episode/{i}").get("hasFile"))
+            return all(has_file[i] for i in ids)
+
+        for r in k.arr.queue():
+            d = (r.get("downloadId") or "").lower()
+            t = torrents.get(d)
+            if not d or d in imported:
+                continue
+            if t and "subgate-rejected" in (t.get("tags") or ""):
+                continue
+            if (t and t["progress"] >= 1 and r.get("trackedDownloadState") == "importBlocked"
+                    and already_have(d)):
+                continue
+            claimed.add(d)
+    # History lies both ways: Sonarr drops it with deleted episode rows, and keeps it after
+    # the library copy is gone. Imports are hardlinks, so the disk has the real answer.
+    for h, t in torrents.items():
+        if h in claimed:
+            continue
+        links = torrent_links(stack, t) if t["progress"] >= 1 else None
+        if links is None:
+            if h in history_claimed:
+                claimed.add(h)
+        elif any(n > 1 for n in links):
+            claimed.add(h)
+    return claimed
+
+
+def torrent_links(stack: Stack, t: dict) -> list[int] | None:
+    try:
+        files = json.loads(stack.qb.call("torrents/files", {"hash": t["hash"]}))
+    except Exception:  # noqa: BLE001 - unknown means "fall back to history"
+        return None
+    return stack.volume.link_counts([os.path.join(t["save_path"], f["name"]) for f in files])
+
+
+def orphan_list(stack: Stack) -> list[dict]:
+    torrents = {t["hash"].lower(): t for t in stack.qb.torrents()}
+    claimed = claimed_hashes(stack, torrents)
     return [{"hash": t["hash"], "name": t["name"], "size": t["size"],
              "sizeHuman": human(t["size"]), "category": t["category"], "state": t["state"],
              "content_path": t.get("content_path")}
-            for t in stack.qb.torrents() if t["hash"].lower() not in claimed]
+            for h, t in torrents.items() if h not in claimed]
 
 
 def orphans_delete(stack: Stack, hashes: list[str]) -> dict:
@@ -1210,7 +1425,7 @@ def import_execute(stack: Stack, kind: str, path: str, ext_id: int, replace: boo
         if k.kind == "show":
             # A new series' episode list loads in the background; matching
             # filenames before it exists finds nothing.
-            k.arr.run_command({"name": "RefreshSeries", "seriesId": item["id"]})
+            refresh_series(k.arr, item["id"], new=True)
     plan = import_plan(stack, kind, path, ext_id, replace)
 
     if k.kind == "movie":

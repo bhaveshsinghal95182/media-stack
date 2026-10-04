@@ -98,7 +98,7 @@ compose.yaml            all services; subgate + library are built locally
 media.sh                lifecycle + `list|add|delete|orphans|import` → library/cli.py
 .env / .env.example     secrets and ids (PUID, PGID, TZ, QBIT_*, *_API_KEY, LIBRARY_*, IMPORT_DIR)
 SETUP.md                human, no-AI install guide; every UI setting by hand
-config/<app>/           app state (gitignored). config/library/{watcher,watchlist}.json, config/subgate/subgate.json
+config/<app>/           app state (gitignored). config/library/{watcher,watchlist,janitor}.json, config/subgate/subgate.json
 backup/                 pre-edit file copies (gitignored)
 
 subgate/
@@ -112,8 +112,9 @@ library/
                         Seasonal, Following, Import, Cleanup. Dialogs: Releases, Follow, Delete, Import
   watcher.py            AiringWatcher: searches just-aired monitored episodes on a schedule
   watchlist.py          Watchlist: thread-safe JSON store of titles saved for later (no Arr involvement)
+  janitor.py            Janitor: removes watched episodes/movies (Jellyfin play state) + disk-space guard
   cli.py                argparse front-end used by media.sh (runs on the HOST)
-  test_library.py, test_watcher.py, test_watchlist.py
+  test_library.py, test_watcher.py, test_watchlist.py, test_janitor.py
 ```
 
 `core.py` runs in two places:
@@ -148,6 +149,10 @@ Keep both paths working.
 - Untagged (`und`) audio counts as English only when the Arr says the title's
   original language is English.
 - **Reject:** `DELETE /api/v3/queue/{id}?removeFromClient=true&blocklist=true`.
+- **Queue lookups pass `includeUnknownSeriesItems=true` /
+  `includeUnknownMovieItems=true`.** Downloads Sonarr can't parse ("matched to
+  series by ID") are hidden from `/queue` otherwise; subgate then never found
+  them and only stopped the torrent.
 - State is kept in `/state/subgate.json`.
 - Settings are environment variables with defaults; see the `Config` class.
 - Because external `.srt` files can pass a release, Radarr/Sonarr have **Import
@@ -191,7 +196,11 @@ Keep both paths working.
     - Adds the series if missing: `monitored=true`,
       `monitorNewItems="all"`, `addOptions.monitor="none"`, and
       `seriesType="anime"` when the genres include Anime.
-    - Runs `RefreshSeries`.
+    - Loads episodes with `refresh_series`. **Never send `RefreshSeries` right
+      after `POST /series`:** Sonarr starts its own refresh on add, the two race,
+      and every episode is inserted twice. Then no release name matches and
+      nothing imports by itself. `refresh_series(new=True)` only waits for
+      Sonarr's refresh. For existing series it waits out any running refresh first.
     - Monitors episodes by mode:
       - `new`: only unaired episodes.
       - `season`: one season, plus everything new.
@@ -224,6 +233,17 @@ Keep both paths working.
     12 h. It gives up after 7 days, leaves at least 4 minutes between searches
     of the same episode, and searches at most 25 episodes per cycle.
   - State is saved atomically to `/state/watcher.json`.
+  - Queue records with no `episodeId` (unknown items) are mapped to episodes
+    through `/history?downloadId=` grabbed events, so they count as queued.
+  - Before each cycle it runs **`core.rescue_imports`**:
+    - Targets downloads that are `importBlocked`, complete and passed by subgate
+      (`subgate-ok`/`-skipped`).
+    - Takes the episodes from Sonarr's grab history and imports the best copy
+      (resolution, then custom format score) with `ManualImport`
+      (`importMode=copy`, i.e. a hardlink).
+    - One import per season/episode number per pass. It skips episodes that
+      already have a file and retries a download at most hourly.
+    - A pack whose files don't parse is logged for a manual import.
   - Sonarr's own RSS sync runs at 10 min, the minimum Sonarr allows.
 - **Watchlist** (`watchlist.py` store, `core.watchlist_view` / `watchlist_send`):
   - Titles saved for later live only in `/state/watchlist.json`
@@ -236,8 +256,57 @@ Keep both paths working.
   - `/api/search` and `/api/seasonal` mark results with `onWatchlist`.
   - The file is on the host disk on purpose, so `destroy` and Docker prunes
     can't touch it.
+- **Janitor** (`janitor.py`; it **deletes media automatically**, and the user asked
+  for that: either user's watch counts, 3-day grace, episodes and movies, no
+  preview mode):
+  - **When it runs.** The disk guard runs every 120 s. Cleanup runs every
+    30 min, and every tick while space is low. It only runs in the container
+    (`LIBRARY_LOCAL_DATA=1`) because it needs `/data` locally for
+    `statvfs`/`stat`. `LIBRARY_JANITOR=0` disables it.
+  - **Disk guard.** `os.statvfs("/data")` reports the host root filesystem,
+    shared with the OS. Below `JANITOR_PAUSE_BELOW_GB` (20) it stops every
+    incomplete torrent with qB 5's `torrents/stop` and records the hashes.
+    Above `JANITOR_RESUME_ABOVE_GB` (25) it starts **only those** with
+    `torrents/start`. Torrents that subgate stopped stay stopped.
+  - **Watched state.** Jellyfin `/Items?userId=..&Filters=IsPlayed` for every
+    user. `watchedAt` is the latest `LastPlayedDate` across users. Items marked
+    played with no date count from when the janitor first saw them (`seen` in
+    the state file).
+  - **Favourites.** An item is kept if any user favourited it, its season or
+    its series. The page's Keep button sets a favourite via
+    `POST /UserFavoriteItems/{id}?userId=`.
+  - **Episodes.** The order matters:
+    1. `PUT /episode/monitor` with `monitored=false`. This comes first, so
+       neither Sonarr nor the airing watcher re-fetches the episode.
+    2. `DELETE /episodefile/{id}`.
+    3. Record the qB torrents holding the file's **inode**.
+    4. A recorded torrent is deleted with its data once all its files have
+       `st_nlink == 1`, meaning nothing is linked into the library any more.
+       Season packs therefore wait for the whole pack.
+  - **Movies.** `delete_plan` + `delete_execute`.
+  - **Limits.** Paths must be under `/data/media/`; at most 50 removals per
+    pass. Holds web's `_job_lock` while deleting.
+  - **Jellyfin API.** Jellyfin is 12.x. Use the header
+    `Authorization: MediaBrowser Token="<key>"`; `X-Emby-Token` returns 401.
+    The key comes from `JELLYFIN_API_KEY`, falling back to the one Seerr keeps
+    in `config/seerr/settings.json`. Item ids change when Jellyfin rescans, so
+    don't cache them.
 - `http_json` pulls `message`/`errorMessage`/`title` out of Arr error bodies, so
   the UI shows the real reason.
+
+- **Leftovers** (`claimed_hashes` → `orphan_list` and the overview count):
+  - Claimed: imported hashes plus queue hashes.
+  - Not claimed: `subgate-rejected` torrents (they're only stopped when
+    subgate can't find them in the queue), and complete `importBlocked`
+    copies whose episodes/movie already have a file or that have no grab in
+    history at all.
+  - **Disk beats history** for finished torrents: claimed if any file has
+    a hardlink count >1 (`Volume.link_counts`, `docker exec stat` from the
+    host). Sonarr deletes history along with deleted episode rows, and keeps
+    "imported" history after the library copy is gone. History is only used
+    when the files can't be read.
+  - Torrents are never deleted automatically. The user deletes them in
+    Cleanup → Leftover torrents.
 
 ## Live configuration worth knowing
 
@@ -288,14 +357,14 @@ docker compose up -d --build subgate     # after editing subgate/*
 docker compose up -d <svc>               # after editing .env (restart does NOT re-read env)
 
 # tests: stdlib unittest, run from inside each folder
-(cd library && python3 -m unittest -q)   # test_library.py, test_watcher.py, test_watchlist.py
+(cd library && python3 -m unittest -q)   # test_library.py, test_watcher.py, test_watchlist.py, test_janitor.py
 (cd subgate && python3 -m unittest -q)
 ```
 
 - **Dependencies:** both services are stdlib only, so don't add pip
   dependencies. subgate's image needs `ffprobe`.
 - **Dockerfile COPY lists:** `library/Dockerfile` copies files by name
-  (`core.py web.py watcher.py watchlist.py index.html`). A new module must be added there.
+  (`core.py web.py watcher.py watchlist.py janitor.py index.html`). A new module must be added there.
 - **Restart loops:** if `.env` lacks a key, both custom containers exit at
   startup and restart-loop. `core.Stack()` and subgate's `Config` fail fast on
   missing settings.

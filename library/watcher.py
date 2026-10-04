@@ -74,8 +74,10 @@ def episode_label(ep: dict) -> str:
 
 class AiringWatcher:
     def __init__(self, make_stack, state_path: str | None, interval: int = 300,
-                 log_size: int = 50):
+                 log_size: int = 50, before_cycle=None):
         self.make_stack = make_stack
+        self.before_cycle = before_cycle  # (stack, log) -> None, e.g. core.rescue_imports
+        self.grab_cache: dict[str, list[int]] = {}  # downloadId -> episode ids
         self.state_path = state_path
         self.interval = interval
         self.log_size = log_size
@@ -92,6 +94,10 @@ class AiringWatcher:
         self.log: list[dict] = []
         self.last_run: float | None = None
         self.last_error: str | None = None
+
+    def _log(self, when: float, message: str) -> None:
+        with self.lock:
+            self._append_log_locked(when, message)
 
     def _append_log_locked(self, when: float, message: str) -> None:
         self.log.append({"t": when, "msg": message})
@@ -119,8 +125,25 @@ class AiringWatcher:
         end_iso = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         episodes = stack.sonarr.get("/calendar", start=start_iso, end=end_iso,
                                     includeSeries="true", unmonitored="false")
-        queue = stack.sonarr.get("/queue", page=1, pageSize=1000).get("records", [])
+        if self.before_cycle:
+            self.before_cycle(stack, lambda msg: self._log(now, msg))
+        # Include downloads Sonarr can't match by name: they carry no episodeId, so map
+        # them through its grab history, or the episode looks missing and gets searched
+        # (and grabbed) again and again.
+        queue = stack.sonarr.get("/queue", page=1, pageSize=1000,
+                                 includeUnknownSeriesItems="true").get("records", [])
         queued_ids = {item["episodeId"] for item in queue if item.get("episodeId")}
+        for item in queue:
+            download_id = item.get("downloadId")
+            if item.get("episodeId") or not download_id:
+                continue
+            if download_id not in self.grab_cache:
+                history = stack.sonarr.get("/history", page=1, pageSize=50,
+                                           downloadId=download_id).get("records", [])
+                self.grab_cache[download_id] = [
+                    h["episodeId"] for h in history
+                    if h.get("eventType") == "grabbed" and h.get("episodeId")]
+            queued_ids.update(self.grab_cache[download_id])
         episodes_by_id = {ep["id"]: ep for ep in episodes if "id" in ep}
         episodes_by_state_key = {str(episode_id): ep
                                  for episode_id, ep in episodes_by_id.items()}

@@ -128,6 +128,9 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
 .seasonbar { display: flex; align-items: center; gap: 6px; }
 .seasonbar .title { min-width: 110px; text-align: center; }
 .row input[type=checkbox] { flex: none; width: 18px; height: 18px; }
+.meter { height: 10px; border-radius: 6px; background: var(--pill); overflow: hidden; margin: 8px 0 4px; }
+.meter > div { height: 100%; background: var(--ok); }
+.meter.low > div { background: var(--danger); } .meter.mid > div { background: var(--warn); }
 .row .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .btns-inline { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 560px) {
@@ -224,6 +227,13 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
   </section>
 
   <section id="cleanup">
+    <div class="tools" style="margin-top:4px"><h2 style="margin:0;flex:1">Disk</h2><button class="btn" id="janRun">Check now</button></div>
+    <div class="panel" style="padding:12px" id="janDisk"><div class="sub">Loading…</div></div>
+    <h2>Watched · removed automatically</h2>
+    <p class="note" id="janNote"></p>
+    <div class="panel" id="janList"><div class="empty">Loading…</div></div>
+    <div class="log" id="janLog"></div>
+    <h2>Leftover torrents</h2>
     <p class="note">Torrents in qBittorrent that aren't linked to any movie or show, usually left over after something was removed. Deleting removes the torrent and its data.</p>
     <div class="panel" id="orphans"><div class="empty">Loading…</div></div>
     <div class="actions"><button class="btn danger solid" id="orphanDelete" disabled>Delete selected</button></div>
@@ -822,7 +832,40 @@ async function importFlow(kind, rel, query) {
 }
 
 // ---- cleanup ----
+async function loadJanitor() {
+  let j;
+  try { j = await api("/api/janitor"); } catch (e) { $("#janDisk").innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  if (!j) {
+    $("#janDisk").innerHTML = `<div class="sub">Automatic cleanup is off.</div>`;
+    $("#janList").innerHTML = ""; $("#janNote").textContent = ""; $("#janLog").textContent = ""; return;
+  }
+  const {free, total} = j.disk, gb = b => `${(b / 1073741824).toFixed(0)} GB`;
+  if (free != null) {
+    const used = 1 - free / total, cls = free < j.pauseBelow ? "low" : free < j.pauseBelow * 2 ? "mid" : "";
+    $("#janDisk").innerHTML = `<div><b>${gb(free)} free</b> <span class="sub">of ${gb(total)} (shared with the laptop)</span></div>
+      <div class="meter ${cls}"><div style="width:${(used * 100).toFixed(1)}%"></div></div>
+      <div class="sub">${j.paused ? `<span class="err">Downloads paused (${j.paused}) until ${gb(j.resumeAbove)} is free.</span>` : `Downloads pause automatically below ${gb(j.pauseBelow)} free and resume above ${gb(j.resumeAbove)}.`}</div>`;
+  }
+  $("#janNote").innerHTML = `Anything watched in Jellyfin (by any user) is removed ${j.graceDays} days after it was last played, and straight away when space runs low. Episodes go but the show stays followed; movies are deleted completely. Favourites in Jellyfin are never removed${j.kept ? ` (${j.kept} kept)` : ""}; <b>Keep</b> marks one as a favourite.${j.waitingTorrents ? ` ${j.waitingTorrents} season pack(s) are waiting for their remaining episodes to be watched before their space is freed.` : ""}${j.lastError ? ` <span class="err">Last error: ${esc(j.lastError)}</span>` : ""}`;
+  const now = Date.now() / 1000;
+  $("#janList").innerHTML = j.scheduled.length ? j.scheduled.map(s => `<div class="row"><div class="grow">
+      <div class="title">${esc(s.label)}</div>
+      <div class="sub"><span class="pill">${s.kind}</span>watched by ${esc(s.users.join(", "))} · ${s.removeAt <= now ? "removing on the next check" : `removed ${esc(rel(s.removeAt))}`}</div></div>
+      <button class="btn" data-keep="${esc(s.itemId)}" data-user="${esc(s.userId)}">Keep</button></div>`).join("")
+    : `<div class="empty">Nothing watched is waiting to be removed.</div>`;
+  $("#janLog").textContent = j.log.length ? j.log.map(l => `${new Date(l.t * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})}  ${l.msg}`).join("\n") : "Nothing removed yet.";
+}
+$("#janList").addEventListener("click", async e => {
+  const b = e.target.closest("[data-keep]"); if (!b) return;
+  b.disabled = true;
+  try { toast((await api("/api/janitor/keep", {itemId: b.dataset.keep, userId: b.dataset.user})).message); b.textContent = "Kept"; }
+  catch (err) { b.disabled = false; toast(err.message); }
+});
+$("#janRun").onclick = async () => {
+  try { toast((await api("/api/janitor/run", {})).message); setTimeout(loadJanitor, 8000); } catch (e) { toast(e.message); }
+};
 async function loadOrphans() {
+  loadJanitor();
   $("#orphanDelete").disabled = true;
   try {
     const list = await api("/api/orphans");

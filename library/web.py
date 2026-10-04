@@ -35,6 +35,7 @@ BROWSE_SCAN_LIMIT = 5000  # files examined per folder when counting videos
 
 WATCHER = None  # airing watcher (watcher.py), started in main()
 WATCHLIST = watchlist.Watchlist(None)  # replaced by the persistent one in main()
+JANITOR = None  # watched cleanup + disk guard (janitor.py), started in main()
 _local = threading.local()
 _job_lock = threading.Lock()  # one state-changing job at a time
 _jobs: dict[str, dict] = {}
@@ -256,6 +257,8 @@ class Handler(BaseHTTPRequestHandler):
                     ("movie", a.get("tmdbId")) if a.get("movie") else ("show", a.get("tvdbId")))))
                     for a in data["items"]]
                 return self._json(200, data)
+            if route == "/api/janitor":
+                return self._json(200, JANITOR.status() if JANITOR else None)
             if route == "/api/watchlist":
                 return self._json(200, core.watchlist_view(stack(), WATCHLIST))
             if route == "/api/following":
@@ -292,6 +295,17 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/add":
                 res = core.add_title(stack(), body["kind"], int(body["extId"]))
                 return self._json(200, res)
+            if route == "/api/janitor/keep":
+                # A Jellyfin favourite is what the janitor treats as "keep".
+                stack().jellyfin.send("POST", f"/UserFavoriteItems/{body['itemId']}",
+                                      userId=str(body["userId"]))
+                return self._json(200, {"message": "Kept: marked as a favourite in Jellyfin."})
+            if route == "/api/janitor/run":
+                if not JANITOR:
+                    raise LibraryError("automatic cleanup is off")
+                JANITOR.last_clean = 0
+                threading.Thread(target=lambda: _quiet(JANITOR.tick), daemon=True).start()
+                return self._json(200, {"message": "Checking now…"})
             if route == "/api/watchlist/add":
                 kind, ext_id = str(body["kind"]), body["extId"]
                 new = WATCHLIST.add(kind, ext_id, body.get("title") or "", body.get("year"),
@@ -377,17 +391,24 @@ def main() -> None:
     core.Stack()  # fail fast on missing settings
     # Warm the AniList->TVDB mapping (5-6 MB) so the Seasonal tab opens quickly.
     threading.Thread(target=lambda: _quiet(core.anime_map), daemon=True).start()
-    global WATCHER, WATCHLIST
+    global WATCHER, WATCHLIST, JANITOR
     WATCHLIST = watchlist.Watchlist(os.environ.get("WATCHLIST_STATE", "/state/watchlist.json"))
     if os.environ.get("LIBRARY_WATCHER", "1") != "0":
         try:
             import watcher
             WATCHER = watcher.AiringWatcher(core.Stack, os.environ.get(
-                "WATCHER_STATE", "/state/watcher.json"))
+                "WATCHER_STATE", "/state/watcher.json"),
+                before_cycle=lambda st, log: core.rescue_imports(st, log))
             WATCHER.start()
             print("airing watcher on", flush=True)
         except ImportError:
             print("watcher.py missing; airing watcher off", flush=True)
+    if os.environ.get("LIBRARY_JANITOR", "1") != "0" and core.Settings().local_data:
+        import janitor
+        JANITOR = janitor.Janitor(core.Stack, os.environ.get(
+            "JANITOR_STATE", "/state/janitor.json"), lock=_job_lock)
+        JANITOR.start()
+        print("watched cleanup on", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
     print(f"media-library on :{PORT} (import folder {IMPORT_ROOT})", flush=True)
