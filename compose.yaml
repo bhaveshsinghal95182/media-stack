@@ -1,0 +1,210 @@
+name: media-stack
+
+x-linuxserver-env: &linuxserver-env
+  PUID: ${PUID}
+  PGID: ${PGID}
+  TZ: ${TZ}
+  UMASK: "002"
+
+services:
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: media-prowlarr
+    environment:
+      <<: *linuxserver-env
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "127.0.0.1:9696:9696"
+    networks:
+      - media_net
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: media-radarr
+    environment:
+      <<: *linuxserver-env
+    volumes:
+      - ./config/radarr:/config
+      - scratch_data:/data
+    ports:
+      - "127.0.0.1:7878:7878"
+    networks:
+      - media_net
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: media-sonarr
+    environment:
+      <<: *linuxserver-env
+    volumes:
+      - ./config/sonarr:/config
+      - scratch_data:/data
+    ports:
+      - "127.0.0.1:8989:8989"
+    networks:
+      - media_net
+    restart: unless-stopped
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: media-qbittorrent
+    environment:
+      <<: *linuxserver-env
+      WEBUI_PORT: "8080"
+      TORRENTING_PORT: "6881"
+    volumes:
+      - ./config/qbittorrent:/config
+      - scratch_data:/data
+    ports:
+      # Web UI: host only
+      - "127.0.0.1:8080:8080"
+
+      # BitTorrent peer port.
+      # This does NOT itself configure router port forwarding.
+      - "6881:6881/tcp"
+      - "6881:6881/udp"
+    networks:
+      - media_net
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: media-jellyfin
+    environment:
+      <<: *linuxserver-env
+    volumes:
+      - ./config/jellyfin:/config
+      - scratch_data:/data:rw
+    ports:
+      # Intentionally LAN-accessible for TV / phone playback.
+      - "8096:8096"
+
+      # Jellyfin client discovery on the LAN.
+      - "7359:7359/udp"
+    networks:
+      - media_net
+    restart: unless-stopped
+
+  seerr:
+    image: ghcr.io/seerr-team/seerr:latest
+    container_name: media-seerr
+    init: true
+    user: "${PUID}:${PGID}"
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ}
+      PORT: "5055"
+    volumes:
+      - ./config/seerr:/app/config
+    ports:
+      # LAN-accessible so requests can be made from a phone (section 22).
+      - "5055:5055"
+    networks:
+      - media_net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:5055/api/v1/settings/public || exit 1"
+        ]
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
+    security_opt:
+      - no-new-privileges
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: media-flaresolverr
+    environment:
+      LOG_LEVEL: info
+      LOG_HTML: "false"
+      CAPTCHA_SOLVER: none
+      TZ: ${TZ}
+    # No host port. Prowlarr reaches it internally at:
+    # http://flaresolverr:8191
+    networks:
+      - media_net
+    restart: unless-stopped
+
+  subgate:
+    # Rejects Radarr/Sonarr torrents that carry no English subtitles,
+    # checking the file list and the video header before the bulk downloads.
+    build: ./subgate
+    image: media-stack-subgate:local
+    container_name: media-subgate
+    user: "${PUID}:${PGID}"
+    environment:
+      TZ: ${TZ}
+      QBIT_URL: http://qbittorrent:8080
+      QBIT_USERNAME: ${QBIT_USERNAME}
+      QBIT_PASSWORD: ${QBIT_PASSWORD}
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: ${RADARR_API_KEY}
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      DRY_RUN: "false"
+    volumes:
+      - ./config/subgate:/state
+      - scratch_data:/data:ro
+    networks:
+      - media_net
+    depends_on:
+      - qbittorrent
+      - radarr
+      - sonarr
+    restart: unless-stopped
+
+  library:
+    # Web page for list / add / delete / import / cleanup (library/).
+    build: ./library
+    image: media-stack-library:local
+    container_name: media-library
+    user: "${PUID}:${PGID}"
+    environment:
+      TZ: ${TZ}
+      LIBRARY_LOCAL_DATA: "1"
+      LIBRARY_PASSWORD: ${LIBRARY_PASSWORD}
+      LIBRARY_USERNAME: ${LIBRARY_USERNAME:-}
+      IMPORT_ROOT: /import
+      SEERR_SETTINGS: /seerr/settings.json
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: ${RADARR_API_KEY}
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      QBIT_URL: http://qbittorrent:8080
+      QBIT_USERNAME: ${QBIT_USERNAME}
+      QBIT_PASSWORD: ${QBIT_PASSWORD}
+      SEERR_URL: http://seerr:5055
+    volumes:
+      - scratch_data:/data
+      - ${IMPORT_DIR}:/import:ro
+      # The folder, not the file: a missing file would be created as a directory.
+      - ./config/seerr:/seerr:ro
+      - ./config/library:/state
+    ports:
+      # LAN-accessible (phone); password-protected.
+      - "8099:8099"
+    networks:
+      - media_net
+    depends_on:
+      - radarr
+      - sonarr
+      - qbittorrent
+    restart: unless-stopped
+
+networks:
+  media_net:
+    name: media-stack-network
+
+volumes:
+  scratch_data:
+    name: media-stack-scratch
