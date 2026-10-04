@@ -299,7 +299,13 @@ Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
     Use it when a download crawls.
   - **Delete**: removes the movie/show, its files, its torrent and the Seerr
     request, then checks that it's really gone.
-- **Add**: search and download a movie or show.
+- **Add**: search and download a movie or show, or **Save for later**.
+- **Watchlist**: titles you saved for later. Nothing downloads until you press
+  **Download** (one title) or tick several and **Download selected**. They
+  then go to Radarr/Sonarr and leave the list. A show downloads every episode;
+  use Follow if you only want new ones. The list is a file,
+  `config/library/watchlist.json`, so `./media.sh destroy` doesn't touch it.
+  The backup in step 13 includes it.
 - **Seasonal**: this season's anime from AniList. **Follow** makes Sonarr grab
   each new episode. Choose this season so far + new episodes, only new
   episodes, or everything.

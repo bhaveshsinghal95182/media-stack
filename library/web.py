@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core  # noqa: E402
+import watchlist  # noqa: E402
 from core import LibraryError  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +34,7 @@ IMPORT_ROOT = os.path.realpath(os.environ.get("IMPORT_ROOT", "/import"))
 BROWSE_SCAN_LIMIT = 5000  # files examined per folder when counting videos
 
 WATCHER = None  # airing watcher (watcher.py), started in main()
+WATCHLIST = watchlist.Watchlist(None)  # replaced by the persistent one in main()
 _local = threading.local()
 _job_lock = threading.Lock()  # one state-changing job at a time
 _jobs: dict[str, dict] = {}
@@ -229,7 +231,8 @@ class Handler(BaseHTTPRequestHandler):
                 k = stack().kind(q.get("kind", ""))
                 term = q.get("q", "").strip()
                 res = k.lookup(term)[:12] if term else []
-                return self._json(200, [core.summarize_lookup(k, r) for r in res])
+                return self._json(200, [dict(core.summarize_lookup(k, r), onWatchlist=WATCHLIST.has(
+                    k.kind, r.get(k.id_key))) for r in res])
             if route == "/api/delete-plan":
                 return self._json(200, core.delete_plan(stack(), q["kind"], int(q["id"])))
             if route == "/api/orphans":
@@ -248,7 +251,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, strip_paths(plan))
             if route == "/api/seasonal":
                 year = int(q["year"]) if q.get("year") else None
-                return self._json(200, core.seasonal_anime(stack(), q.get("season"), year))
+                data = dict(core.seasonal_anime(stack(), q.get("season"), year))
+                data["items"] = [dict(a, onWatchlist=WATCHLIST.has(*(
+                    ("movie", a.get("tmdbId")) if a.get("movie") else ("show", a.get("tvdbId")))))
+                    for a in data["items"]]
+                return self._json(200, data)
+            if route == "/api/watchlist":
+                return self._json(200, core.watchlist_view(stack(), WATCHLIST))
             if route == "/api/following":
                 data = core.following(stack(), WATCHER)
                 data["watcher"] = WATCHER.status() if WATCHER else None
@@ -283,6 +292,24 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/add":
                 res = core.add_title(stack(), body["kind"], int(body["extId"]))
                 return self._json(200, res)
+            if route == "/api/watchlist/add":
+                kind, ext_id = str(body["kind"]), body["extId"]
+                new = WATCHLIST.add(kind, ext_id, body.get("title") or "", body.get("year"),
+                                    body.get("poster"), body.get("overview"))
+                title = " ".join(str(body.get("title") or "It").split())
+                return self._json(200, {"added": new, "message": f"{title} saved to your watchlist."
+                                        if new else f"{title} was already on your watchlist."})
+            if route == "/api/watchlist/remove":
+                gone = WATCHLIST.remove(str(body["kind"]), body["extId"])
+                return self._json(200, {"removed": gone, "message": "Removed from your watchlist."
+                                        if gone else "It wasn't on your watchlist."})
+            if route == "/api/watchlist/send":
+                keys = [(str(i["kind"]), int(i["extId"])) for i in body["items"]]
+                if not keys:
+                    raise LibraryError("nothing selected")
+                return self._json(200, {"job": start_job(
+                    f"Download {len(keys)} from the watchlist",
+                    lambda log, _p: core.watchlist_send(core.Stack(), WATCHLIST, keys, log))})
             if route == "/api/follow":
                 season = body.get("season")
                 tvdb, mode = int(body["tvdbId"]), str(body["mode"])
@@ -333,6 +360,8 @@ class Handler(BaseHTTPRequestHandler):
         except (LibraryError, KeyError, ValueError) as e:
             return self._json(400, {"error": str(e) if isinstance(e, LibraryError)
                                     else f"bad request ({e})"})
+        except OSError as e:  # the watchlist file couldn't be saved
+            return self._json(500, {"error": f"couldn't save: {e}"})
 
 
 def _quiet(fn) -> None:
@@ -348,7 +377,8 @@ def main() -> None:
     core.Stack()  # fail fast on missing settings
     # Warm the AniList->TVDB mapping (5-6 MB) so the Seasonal tab opens quickly.
     threading.Thread(target=lambda: _quiet(core.anime_map), daemon=True).start()
-    global WATCHER
+    global WATCHER, WATCHLIST
+    WATCHLIST = watchlist.Watchlist(os.environ.get("WATCHLIST_STATE", "/state/watchlist.json"))
     if os.environ.get("LIBRARY_WATCHER", "1") != "0":
         try:
             import watcher

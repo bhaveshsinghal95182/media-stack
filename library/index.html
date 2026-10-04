@@ -127,10 +127,17 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
 .radio input { margin-top: 4px; }
 .seasonbar { display: flex; align-items: center; gap: 6px; }
 .seasonbar .title { min-width: 110px; text-align: center; }
+.row input[type=checkbox] { flex: none; width: 18px; height: 18px; }
+.row .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.btns-inline { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 560px) {
   .hide-sm { display: none; }
   nav { margin-left: 0; width: 100%; }
-  nav button { flex: 1 1 30%; padding: 6px 4px; font-size: 14px; }
+  nav button { flex: 1 1 22%; padding: 6px 4px; font-size: 14px; }
+  #wlList .row { flex-wrap: wrap; }
+  #wlList .row .grow { flex-basis: calc(100% - 100px); }
+  #wlList .row .title { white-space: normal; }
+  #wlList .row .btns { width: 100%; }
 }
 </style>
 </head>
@@ -140,6 +147,7 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
   <nav id="tabs">
     <button data-tab="library" class="on">Library</button>
     <button data-tab="add">Add</button>
+    <button data-tab="watchlist">Watchlist<span id="wlBadge"></span></button>
     <button data-tab="seasonal">Seasonal</button>
     <button data-tab="following">Following</button>
     <button data-tab="import">Import</button>
@@ -167,6 +175,17 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
     </div>
     <p class="note">Adding searches for a release straight away. subgate then checks it for English subtitles or audio.</p>
     <div class="grid" id="addResults"></div>
+  </section>
+
+  <section id="watchlist">
+    <div class="tools">
+      <div class="seg" id="wlKind"><button data-k="all" class="on">All</button><button data-k="movie">Movies</button><button data-k="show">Shows</button></div>
+      <input type="search" id="wlFilter" placeholder="Filter watchlist…">
+      <button class="btn" id="wlAll">Select all</button>
+      <button class="btn primary" id="wlSend" disabled>Download selected</button>
+    </div>
+    <p class="note">Saved for later. Nothing downloads until you press Download; then it goes to Radarr/Sonarr and leaves this list. A show downloads every episode; to get only new ones, use Follow instead. Save titles from the Add and Seasonal tabs.</p>
+    <div class="panel" id="wlList"><div class="empty">Loading…</div></div>
   </section>
 
   <section id="seasonal">
@@ -241,7 +260,7 @@ function openDialog(html, wide = false) {
 function closeDialog() { dlg.close(); }
 
 // ---- tabs ----
-const loaders = {library: loadLibrary, add: () => $("#addQuery").focus(), seasonal: () => loadSeasonal(), following: loadFollowing, import: () => loadBrowse(browsePath), cleanup: loadOrphans};
+const loaders = {library: loadLibrary, add: () => $("#addQuery").focus(), watchlist: loadWatchlist, seasonal: () => loadSeasonal(), following: loadFollowing, import: () => loadBrowse(browsePath), cleanup: loadOrphans};
 $("#tabs").addEventListener("click", e => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
@@ -522,8 +541,8 @@ function renderSeasonal() {
       const i = d.items.indexOf(a);
       const meta = [a.studios[0], a.format && a.format.replace("_", " "), a.episodes ? `${a.episodes} eps` : null, a.score ? `★ ${a.score}%` : null].filter(Boolean).join(" · ");
       let btn;
-      if (a.movie) btn = a.inLibrary ? `<span class="pill fol">in library</span>` : a.tmdbId ? `<button class="btn primary" data-amovie="${i}">Add movie</button>` : `<span class="sub">not matched to TMDB</span>`;
-      else btn = a.following ? `<span class="pill fol">✓ following</span><button class="btn" data-afollow="${i}">Change</button>` : `<button class="btn primary" data-afollow="${i}">Follow</button>`;
+      if (a.movie) btn = a.inLibrary ? `<span class="pill fol">in library</span>` : a.tmdbId ? `<button class="btn primary" data-amovie="${i}">Add movie</button>${wlButton(a.onWatchlist, `data-awl="${i}"`)}` : `<span class="sub">not matched to TMDB</span>`;
+      else btn = a.following ? `<span class="pill fol">✓ following</span><button class="btn" data-afollow="${i}">Change</button>` : `<button class="btn primary" data-afollow="${i}">Follow</button>${a.tvdbId && !a.inLibrary ? wlButton(a.onWatchlist, `data-awl="${i}"`) : ""}`;
       return `<div class="panel acard"><div class="top">${img(a.cover)}
         <div class="grow"><div class="title">${esc(a.title)}</div>
           ${a.romaji && a.romaji !== a.title ? `<div class="sub">${esc(a.romaji)}</div>` : ""}
@@ -545,6 +564,9 @@ $("#seasFormat").addEventListener("click", e => {
   seasonal && renderSeasonal();
 });
 $("#seasGrid").addEventListener("click", async e => {
+  const w = e.target.closest("[data-awl]");
+  if (w) { const a = seasonal.items[Number(w.dataset.awl)];
+    return wlSave({kind: a.movie ? "movie" : "show", extId: a.movie ? a.tmdbId : a.tvdbId, title: a.title, year: a.year || seasonal.year, poster: a.cover, overview: a.synopsis}, w, () => { a.onWatchlist = true; }); }
   const f = e.target.closest("[data-afollow]");
   if (f) { const a = seasonal.items[Number(f.dataset.afollow)]; return followFlow({title: a.title, tvdbId: a.tvdbId, tvdbSeason: a.tvdbSeason, unsure: !a.tvdbId}); }
   const m = e.target.closest("[data-amovie]");
@@ -613,7 +635,7 @@ $("#following").addEventListener("click", async e => {
 });
 
 // ---- add ----
-let addKind = "movie";
+let addKind = "movie", addRes = [];
 $("#addKind").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   addKind = b.dataset.kind;
@@ -624,24 +646,100 @@ async function addSearch() {
   const q = $("#addQuery").value.trim(); if (!q) return;
   $("#addResults").innerHTML = `<div class="empty">Searching…</div>`;
   try {
-    const res = await api(`/api/search?kind=${addKind}&q=${encodeURIComponent(q)}`);
-    $("#addResults").innerHTML = res.length ? res.map(r => `
+    const res = addRes = await api(`/api/search?kind=${addKind}&q=${encodeURIComponent(q)}`);
+    $("#addResults").innerHTML = res.length ? res.map((r, i) => `
       <div class="panel card">${img(r.poster)}
         <div class="grow"><div class="title">${esc(r.title)}</div><div class="sub">${esc(r.year || "")}</div>
         <div class="ov">${esc(r.overview)}</div>
-        <button class="btn ${r.inLibrary ? "" : "primary"}" data-add="${r.extId}">${r.inLibrary ? "In library · search again" : "Add & download"}</button></div>
+        <div class="btns-inline"><button class="btn ${r.inLibrary ? "" : "primary"}" data-add="${r.extId}">${r.inLibrary ? "In library · search again" : "Add & download"}</button>
+        ${r.inLibrary ? "" : wlButton(r.onWatchlist, `data-addwl="${i}"`)}</div></div>
       </div>`).join("") : `<div class="empty">No results</div>`;
   } catch (e) { $("#addResults").innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
 }
 $("#addSearch").onclick = addSearch;
 $("#addQuery").addEventListener("keydown", e => e.key === "Enter" && addSearch());
 $("#addResults").addEventListener("click", async e => {
+  const w = e.target.closest("[data-addwl]");
+  if (w) { const r = addRes[Number(w.dataset.addwl)]; return wlSave({kind: addKind, extId: r.extId, title: r.title, year: r.year, poster: r.poster, overview: r.overview}, w); }
   const b = e.target.closest("[data-add]"); if (!b) return;
   b.disabled = true; b.textContent = "Adding…";
   try {
     const r = await api("/api/add", {kind: addKind, extId: Number(b.dataset.add)});
     b.textContent = r.added ? "Added · searching" : "Searching again"; toast(r.message);
   } catch (err) { b.disabled = false; b.textContent = "Retry"; toast(err.message); }
+});
+
+// ---- watchlist ----
+let wl = null, wlKind = "all";
+const wlButton = (on, attr) => on ? `<button class="btn" disabled>✓ On watchlist</button>` : `<button class="btn" ${attr}>Save for later</button>`;
+async function wlSave(item, btn, after) {
+  btn.disabled = true;
+  try { const r = await api("/api/watchlist/add", item); btn.textContent = "✓ On watchlist"; toast(r.message); after && after(); wlCount(); }
+  catch (err) { btn.disabled = false; toast(err.message); }
+}
+function wlBadge(n) { $("#wlBadge").innerHTML = n ? ` <span class="sub">${n}</span>` : ""; }
+async function wlCount() { try { wl = await api("/api/watchlist"); wlBadge(wl.items.length); } catch {} }
+async function loadWatchlist() {
+  try { wl = await api("/api/watchlist"); } catch (e) { $("#wlList").innerHTML = `<div class="empty err">${esc(e.message)}</div>`; return; }
+  renderWatchlist();
+}
+function wlVisible() {
+  const f = $("#wlFilter").value.trim().toLowerCase();
+  return wl.items.filter(it => (wlKind === "all" || it.kind === wlKind) && (!f || it.title.toLowerCase().includes(f)));
+}
+function wlSelected() { return [...document.querySelectorAll(".wlchk:checked")].map(x => wl.items[Number(x.value)]); }
+function wlSync() {
+  const n = wlSelected().length, b = $("#wlSend");
+  b.disabled = !n; b.textContent = n ? `Download selected (${n})` : "Download selected";
+}
+function renderWatchlist() {
+  wlBadge(wl.items.length);
+  const rows = wlVisible();
+  $("#wlList").innerHTML = rows.length ? rows.map(it => {
+    const i = wl.items.indexOf(it);
+    return `<div class="row"><input type="checkbox" class="wlchk" value="${i}" aria-label="Select ${esc(it.title)}">${img(it.poster, "poster")}
+      <div class="grow"><div class="title">${esc(it.title)} <span class="sub">${esc(it.year || "")}</span></div>
+        <div class="sub"><span class="pill">${it.kind === "movie" ? "movie" : "show"}</span>${it.inLibrary ? `<span class="pill ok">already in library</span>` : ""}saved ${esc(rel(it.added))}</div>
+        ${it.overview ? `<div class="sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.overview)}</div>` : ""}</div>
+      <div class="btns"><button class="btn primary" data-wlsend="${i}">Download</button><button class="btn danger" data-wlrm="${i}" aria-label="Remove ${esc(it.title)}">Remove</button></div></div>`;
+  }).join("") : `<div class="empty">${wl.items.length ? "Nothing matches." : "Your watchlist is empty. Use “Save for later” in the Add or Seasonal tabs."}</div>`;
+  $("#wlAll").textContent = "Select all"; wlSync();
+}
+async function wlSend(items) {
+  try {
+    const {job} = await api("/api/watchlist/send", {items: items.map(it => ({kind: it.kind, extId: it.extId}))});
+    runJob(job, items.length === 1 ? `Download ${items[0].title}` : `Download ${items.length} titles`, {
+      success: r => r.message,
+      failure: r => (r?.message || "Some failed") + " They stay on the watchlist.",
+      after: loadWatchlist});
+  } catch (e) { toast(e.message); }
+}
+$("#wlFilter").addEventListener("input", () => wl && renderWatchlist());
+$("#wlKind").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  wlKind = b.dataset.k;
+  document.querySelectorAll("#wlKind button").forEach(x => x.classList.toggle("on", x === b));
+  wl && renderWatchlist();
+});
+$("#wlAll").onclick = () => {
+  const boxes = [...document.querySelectorAll(".wlchk")], on = !boxes.every(x => x.checked);
+  boxes.forEach(x => x.checked = on); $("#wlAll").textContent = on ? "Select none" : "Select all"; wlSync();
+};
+$("#wlSend").onclick = () => {
+  const items = wlSelected(); if (!items.length) return;
+  const shows = items.filter(it => it.kind === "show").length;
+  if (!confirm(`Download ${items.length} title(s) now?${shows ? `\n${shows} show(s) will download every episode.` : ""}`)) return;
+  wlSend(items);
+};
+$("#wlList").addEventListener("change", e => e.target.matches(".wlchk") && wlSync());
+$("#wlList").addEventListener("click", async e => {
+  const s = e.target.closest("[data-wlsend]");
+  if (s) { const it = wl.items[Number(s.dataset.wlsend)];
+    if (it.kind === "show" && !confirm(`Download every episode of ${it.title}?`)) return;
+    return wlSend([it]); }
+  const r = e.target.closest("[data-wlrm]");
+  if (r) { const it = wl.items[Number(r.dataset.wlrm)];
+    try { toast((await api("/api/watchlist/remove", {kind: it.kind, extId: it.extId})).message); loadWatchlist(); } catch (err) { toast(err.message); } }
 });
 
 // ---- import ----
@@ -754,6 +852,7 @@ $("#orphanDelete").onclick = async () => {
 let start = "library";
 try { start = localStorage.getItem("tab") || "library"; } catch {}
 loadLibrary();
+wlCount();
 if (start !== "library") $(`#tabs button[data-tab="${start}"]`)?.click();
 </script>
 </body>

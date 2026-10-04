@@ -85,5 +85,28 @@ class ImportGuard(unittest.TestCase):
         self.assertEqual(names, {"Show"})  # no passport, no fonts folder, no escaping link target
 
 
+class WatchlistSend(unittest.TestCase):
+    def test_sent_titles_leave_failed_ones_stay(self):
+        import watchlist
+        wl = watchlist.Watchlist(None)
+        wl.add("movie", 1, "Good")
+        wl.add("show", 2, "Bad")
+
+        def fake_add(_stack, kind, ext_id):
+            if ext_id == 2:
+                raise core.LibraryError("tvdb:2 not found")
+            return {"label": f"{kind} {ext_id}", "message": "added"}
+
+        real, core.add_title = core.add_title, fake_add
+        try:
+            res = core.watchlist_send(None, wl, [("movie", 1), ("show", 2)], log=lambda m: None)
+        finally:
+            core.add_title = real
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["sent"], ["movie 1"])
+        self.assertEqual([f["extId"] for f in res["failed"]], [2])
+        self.assertEqual([(i["kind"], i["extId"]) for i in wl.items()], [("show", 2)])
+
+
 if __name__ == "__main__":
     unittest.main()

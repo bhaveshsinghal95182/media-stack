@@ -968,6 +968,41 @@ def seasonal_anime(stack: Stack, season: str | None = None, year: int | None = N
 
 
 # --------------------------------------------------------------------------
+# Watchlist: titles to remember without downloading (storage in watchlist.py)
+# --------------------------------------------------------------------------
+
+def watchlist_view(stack: Stack, wl) -> dict:
+    """Watchlist items, each marked with whether Radarr/Sonarr already have it."""
+    items = wl.items()
+    have: dict[str, dict] = {}
+    for kind in {it["kind"] for it in items}:
+        k = stack.kind(kind)
+        have[kind] = {i.get(k.id_key): i["id"] for i in k.items()}
+    for it in items:
+        lib_id = have.get(it["kind"], {}).get(it["extId"])
+        it["inLibrary"], it["libraryId"] = lib_id is not None, lib_id
+    return {"items": items}
+
+
+def watchlist_send(stack: Stack, wl, keys: list[tuple[str, int]], log=print) -> dict:
+    """Add titles to Radarr/Sonarr and search now; each one sent leaves the list."""
+    sent, failed = [], []
+    for kind, ext_id in keys:
+        try:
+            res = add_title(stack, kind, ext_id)
+        except LibraryError as e:
+            failed.append({"kind": kind, "extId": ext_id, "error": str(e)})
+            log(f"Failed {kind} {ext_id}: {e}")
+            continue
+        wl.remove(kind, ext_id)
+        sent.append(res["label"])
+        log(res["message"])
+    return {"ok": not failed, "sent": sent, "failed": failed,
+            "message": f"Sent {len(sent)} to Radarr/Sonarr"
+                       + (f", {len(failed)} failed" if failed else "") + "."}
+
+
+# --------------------------------------------------------------------------
 # Orphans
 # --------------------------------------------------------------------------
 

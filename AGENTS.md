@@ -98,7 +98,7 @@ compose.yaml            all services; subgate + library are built locally
 media.sh                lifecycle + `list|add|delete|orphans|import` → library/cli.py
 .env / .env.example     secrets and ids (PUID, PGID, TZ, QBIT_*, *_API_KEY, LIBRARY_*, IMPORT_DIR)
 SETUP.md                human, no-AI install guide; every UI setting by hand
-config/<app>/           app state (gitignored). config/library/watcher.json, config/subgate/subgate.json
+config/<app>/           app state (gitignored). config/library/{watcher,watchlist}.json, config/subgate/subgate.json
 backup/                 pre-edit file copies (gitignored)
 
 subgate/
@@ -108,11 +108,12 @@ library/
   core.py               ALL logic: Settings, http clients (Arr, QBit), Volume, Stack, overview,
                         add, delete, releases, follow/following, seasonal (AniList), orphans, import
   web.py                stdlib HTTP server + JSON API, auth, background jobs; serves index.html
-  index.html            the whole UI (vanilla JS, no build step). Tabs: Library, Add, Seasonal,
-                        Following, Import, Cleanup. Dialogs: Releases, Follow, Delete, Import
+  index.html            the whole UI (vanilla JS, no build step). Tabs: Library, Add, Watchlist,
+                        Seasonal, Following, Import, Cleanup. Dialogs: Releases, Follow, Delete, Import
   watcher.py            AiringWatcher: searches just-aired monitored episodes on a schedule
+  watchlist.py          Watchlist: thread-safe JSON store of titles saved for later (no Arr involvement)
   cli.py                argparse front-end used by media.sh (runs on the HOST)
-  test_library.py, test_watcher.py
+  test_library.py, test_watcher.py, test_watchlist.py
 ```
 
 `core.py` runs in two places:
@@ -224,6 +225,17 @@ Keep both paths working.
     of the same episode, and searches at most 25 episodes per cycle.
   - State is saved atomically to `/state/watcher.json`.
   - Sonarr's own RSS sync runs at 10 min, the minimum Sonarr allows.
+- **Watchlist** (`watchlist.py` store, `core.watchlist_view` / `watchlist_send`):
+  - Titles saved for later live only in `/state/watchlist.json`
+    (`config/library/`), keyed by (kind, extId). extId is the TMDB id for
+    movies and the TVDB id for shows.
+  - Radarr/Sonarr don't know about them until they're sent. Sending calls
+    `add_title`, which adds and searches; a show gets every episode.
+  - Each title that's sent successfully is removed from the list. Failed ones
+    stay.
+  - `/api/search` and `/api/seasonal` mark results with `onWatchlist`.
+  - The file is on the host disk on purpose, so `destroy` and Docker prunes
+    can't touch it.
 - `http_json` pulls `message`/`errorMessage`/`title` out of Arr error bodies, so
   the UI shows the real reason.
 
@@ -276,14 +288,14 @@ docker compose up -d --build subgate     # after editing subgate/*
 docker compose up -d <svc>               # after editing .env (restart does NOT re-read env)
 
 # tests: stdlib unittest, run from inside each folder
-(cd library && python3 -m unittest -q)   # test_library.py + test_watcher.py
+(cd library && python3 -m unittest -q)   # test_library.py, test_watcher.py, test_watchlist.py
 (cd subgate && python3 -m unittest -q)
 ```
 
 - **Dependencies:** both services are stdlib only, so don't add pip
   dependencies. subgate's image needs `ffprobe`.
 - **Dockerfile COPY lists:** `library/Dockerfile` copies files by name
-  (`core.py web.py watcher.py index.html`). A new module must be added there.
+  (`core.py web.py watcher.py watchlist.py index.html`). A new module must be added there.
 - **Restart loops:** if `.env` lacks a key, both custom containers exit at
   startup and restart-loop. `core.Stack()` and subgate's `Config` fail fast on
   missing settings.
