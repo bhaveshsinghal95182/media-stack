@@ -248,6 +248,39 @@ Open http://localhost:8096 and go through the wizard:
    LAN, since nothing is forwarded on the router.
 4. On the TV/phone app, add the server `http://<laptop LAN IP>:8096`.
 
+### 9a. Hardware transcoding (Intel Quick Sync, NVIDIA on AC)
+
+Without this, a transcode runs on the CPU at full load. A phone that can't
+draw styled subtitles makes Jellyfin burn them in, which means a transcode.
+
+The `gpuswitch` container sets all of this for you and keeps it set. Here is
+what it changes in **Dashboard → Playback → Transcoding**, if you do it by hand:
+
+- **Hardware acceleration:** Intel QuickSync (QSV). QSV device: the Intel
+  render node (check with `ls -l /dev/dri/by-path/`, the `pci-0000:00:02.0-render`
+  entry; gpuswitch finds it by vendor on every check, since numbering can change).
+- **Enable hardware decoding for:** H264, HEVC, MPEG2, VC1, VP8, VP9, AV1;
+  10-bit HEVC and VP9 on.
+- **Hardware encoding:** on. **Tone mapping** and **VPP tone mapping:** on.
+- **Throttle transcodes** and **Delete segments:** on. Without throttling, one
+  stream encodes the whole rest of the film at full power.
+
+The compose file gives Jellyfin `/dev/dri`. On battery gpuswitch always uses
+QSV. On AC it uses `JELLYFIN_AC_HWACCEL` from `.env` (`qsv` or `nvenc`).
+When AC is lost, it stops NVENC transcodes so the NVIDIA GPU can sleep, and
+the player restarts on QSV.
+
+**`compose.yaml` expects an NVIDIA GPU.** The `jellyfin` service has
+`runtime: nvidia`, and Jellyfin won't start until Docker knows that runtime:
+
+1. As root, once: `bash gpuswitch/setup-nvidia-runtime.sh`. This installs
+   `nvidia-container-toolkit`, registers it with Docker and restarts Docker.
+2. Set `JELLYFIN_AC_HWACCEL=nvenc` in `.env`, then run
+   `docker compose up -d jellyfin gpuswitch`.
+
+On a machine without an NVIDIA GPU, delete `runtime: nvidia` and the two
+`NVIDIA_*` lines from the `jellyfin` service, and set `JELLYFIN_AC_HWACCEL=qsv`.
+
 ---
 
 ## 10. Seerr (requests)

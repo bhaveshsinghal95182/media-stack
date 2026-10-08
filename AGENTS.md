@@ -104,6 +104,10 @@ backup/                 pre-edit file copies (gitignored)
 subgate/
   subgate.py            the gate (stdlib + ffprobe); README.md documents the algorithm
   test_subgate.py       unit tests (pure functions: classification, stream decisions)
+gpuswitch/
+  gpuswitch.py          sets Jellyfin's encoding config by power source (AC → JELLYFIN_AC_HWACCEL, battery → qsv);
+                        on AC loss stops transcodes on the AC hardware. python:3.13-alpine, script bind-mounted, no build
+  setup-nvidia-runtime.sh  root one-off: nvidia-container-toolkit + docker runtime (needed before nvenc)
 library/
   core.py               ALL logic: Settings, http clients (Arr, QBit), Volume, Stack, overview,
                         add, delete, releases, follow/following, seasonal (AniList), orphans, import
@@ -309,6 +313,20 @@ Keep both paths working.
     Cleanup → Leftover torrents.
 
 ## Live configuration worth knowing
+
+- **Python services need `init: true`** (library, subgate, gpuswitch). Python
+  as PID 1 ignores SIGTERM, so a Docker restart SIGKILLs it and then leaves it
+  down. This happened on 2026-10-05.
+- **Jellyfin runs with `runtime: nvidia`.** Without nvidia-container-toolkit it
+  won't start. NVENC is used on AC only; the dGPU runtime-suspends when idle
+  (`/sys/bus/pci/devices/0000:01:00.0/power/runtime_status`).
+- **Jellyfin transcoding is owned by gpuswitch.** It rewrites
+  HardwareAccelerationType, QsvDevice, decode codecs, tone mapping, throttling
+  and segment deletion every 15 s, so edit `gpuswitch.py`, not the dashboard.
+  Its own Jellyfin key is `JELLYFIN_GPUSWITCH_API_KEY`. Jellyfin wants the key
+  in an `Authorization: MediaBrowser Token="…"` header; `api_key=` in the
+  query string gets a 401. Intel is the i915 node (vendor 0x8086), and NVIDIA
+  holds the other one. The streaming API refuses `StartTimeTicks` on HLS segments.
 
 - **qB:**
   - Paths: automatic torrent management, save `/data/downloads`, incomplete
