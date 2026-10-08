@@ -154,3 +154,15 @@ class EpisodeRemoval(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ForceClean(unittest.TestCase):
+    def test_force_skips_grace_and_refuses_while_a_check_runs(self):
+        jan = j.Janitor(lambda: None, None)
+        calls = []
+        jan.clean = lambda stack, now, low: calls.append(low)
+        self.assertTrue(jan.force_clean())
+        self.assertEqual(calls, [True])                 # low=True: grace period ignored
+        jan.tick_lock.acquire()
+        self.assertFalse(jan.force_clean())
+        self.assertEqual(calls, [True])

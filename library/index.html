@@ -227,7 +227,7 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
   </section>
 
   <section id="cleanup">
-    <div class="tools" style="margin-top:4px"><h2 style="margin:0;flex:1">Disk</h2><button class="btn" id="janRun">Check now</button></div>
+    <div class="tools" style="margin-top:4px"><h2 style="margin:0;flex:1">Disk</h2><button class="btn" id="janRun">Check now</button><button class="btn" id="janForce">Force cleanup</button></div>
     <div class="panel" style="padding:12px" id="janDisk"><div class="sub">Loading…</div></div>
     <h2>Watched · removed automatically</h2>
     <p class="note" id="janNote"></p>
@@ -863,6 +863,10 @@ $("#janList").addEventListener("click", async e => {
 });
 $("#janRun").onclick = async () => {
   try { toast((await api("/api/janitor/run", {})).message); setTimeout(loadJanitor, 8000); } catch (e) { toast(e.message); }
+};
+$("#janForce").onclick = async () => {
+  if (!confirm("Delete everything watched now, without waiting for the grace period? Favourites are kept.")) return;
+  try { toast((await api("/api/janitor/force", {})).message); setTimeout(loadJanitor, 8000); } catch (e) { toast(e.message); }
 };
 async function loadOrphans() {
   loadJanitor();

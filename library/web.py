@@ -306,6 +306,11 @@ class Handler(BaseHTTPRequestHandler):
                 JANITOR.last_clean = 0
                 threading.Thread(target=lambda: _quiet(JANITOR.tick), daemon=True).start()
                 return self._json(200, {"message": "Checking now…"})
+            if route == "/api/janitor/force":
+                if not JANITOR:
+                    raise LibraryError("automatic cleanup is off")
+                threading.Thread(target=lambda: _quiet(JANITOR.force_clean), daemon=True).start()
+                return self._json(200, {"message": "Removing everything watched…"})
             if route == "/api/watchlist/add":
                 kind, ext_id = str(body["kind"]), body["extId"]
                 new = WATCHLIST.add(kind, ext_id, body.get("title") or "", body.get("year"),

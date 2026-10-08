@@ -182,6 +182,21 @@ class Janitor:
         finally:
             self.tick_lock.release()
 
+    def force_clean(self) -> bool:
+        """Remove everything watched now, skipping the grace period (favourites stay).
+
+        Returns False when a check is already running."""
+        if not self.tick_lock.acquire(blocking=False):
+            return False
+        try:
+            self._log("Forced cleanup: grace period skipped")
+            self.clean(self.make_stack(), time.time(), True)
+            self.last_clean = time.time()
+            self._save()
+        finally:
+            self.tick_lock.release()
+        return True
+
     def _tick(self, now: float) -> None:
         free, total = self.free_space()
         self.disk = {"free": free, "total": total}
