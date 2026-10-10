@@ -1,0 +1,40 @@
+{% import "macros/ui.html" as ui %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="htmx-config" content='{"defaultSwapStyle": "innerHTML", "scrollIntoViewOnBoost": false}'>
+<title>{% block title %}Media Library{% endblock %}</title>
+<link rel="stylesheet" href="{{ static_url('app.css') }}">
+<script src="{{ static_url('htmx.min.js') }}" defer></script>
+<script src="{{ static_url('app.js') }}" defer></script>
+</head>
+<body hx-boost="true">
+<header class="sticky top-0 z-20 border-b border-line bg-surface/85 backdrop-blur-md">
+  <div class="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 pt-3 sm:py-3">
+    <a href="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
+      <span class="grid size-8 place-items-center rounded-lg bg-accent text-accent-fg shadow-sm">{{ ui.icon("film", "size-4") }}</span>
+      Media Library
+    </a>
+    <nav class="no-scrollbar -mx-4 flex w-[calc(100%+2rem)] gap-1 overflow-x-auto px-4 pb-2 sm:mx-0 sm:ml-auto sm:w-auto sm:p-0" aria-label="Sections">
+      {% for key, href, label in nav %}
+      <a href="{{ href }}" class="nav-link" {% if active == key %}aria-current="page"{% endif %}>
+        {{ label }}
+        {% if key == "watchlist" %}{{ ui.badge("watchlist-badge", watchlist_count, "/watchlist/count", ["watchlist-changed"]) }}{% endif %}
+        {% if key == "cleanup" %}{{ ui.badge("orphan-badge", orphan_count, "/cleanup/orphans/count", ["library-changed"], load=orphan_count is none) }}{% endif %}
+      </a>
+      {% endfor %}
+    </nav>
+  </div>
+</header>
+
+<main class="mx-auto max-w-6xl px-4 pb-16 pt-5">
+  {% block content %}{% endblock %}
+</main>
+
+<dialog id="dialog" class="dialog" aria-labelledby="dialog-title"><div id="dialog-body"></div></dialog>
+<div id="toasts" class="toasts" popover="manual" aria-live="polite"></div>
+</body>
+</html>

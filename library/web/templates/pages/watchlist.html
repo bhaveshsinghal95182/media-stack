@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div data-filter-scope>
+  <div class="toolbar">
+    <div class="seg" role="radiogroup" aria-label="Show">
+      <label><input type="radio" name="wl-kind" value="all" data-filter-kind checked>All</label>
+      <label><input type="radio" name="wl-kind" value="movie" data-filter-kind>Movies</label>
+      <label><input type="radio" name="wl-kind" value="show" data-filter-kind>Shows</label>
+    </div>
+    <label class="input-icon grow">
+      {{ ui.icon("search") }}
+      <input type="search" class="input" placeholder="Filter the watchlist…" data-filter-text aria-label="Filter the watchlist">
+    </label>
+    <button type="button" class="btn" data-select-all="#watchlist-list">Select all</button>
+    <button type="button" class="btn btn-primary" disabled data-selection="#watchlist-list"
+            hx-post="/watchlist/send" hx-include="#watchlist-list input[name=key]:checked" hx-target="#dialog-body"
+            hx-confirm="Download the selected titles now? A show downloads every episode.">
+      {{ ui.icon("download") }}Download selected <span data-count></span></button>
+  </div>
+  <p class="note">Saved for later. Nothing downloads until you press Download; then it goes to Radarr/Sonarr and leaves this list. A show downloads every episode; to get only new ones, use Follow instead.</p>
+  <div id="watchlist-list" class="mt-4" hx-get="/watchlist/list" hx-trigger="load, watchlist-changed from:body">
+    {{ ui.loading() }}
+  </div>
+</div>
+{% endblock %}

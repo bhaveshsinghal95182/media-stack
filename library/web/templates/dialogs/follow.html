@@ -1,0 +1,38 @@
+{% extends "dialogs/_frame.html" %}
+{% block title %}Follow {{ title }}{% endblock %}
+{% block body %}
+<form class="flex gap-2" hx-get="/following/follow" hx-target="#dialog-body" hx-disabled-elt="find button">
+  <input type="hidden" name="title" value="{{ title }}">
+  {% if season is not none %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
+  <input type="hidden" name="unsure" value="{{ 'true' if unsure else 'false' }}">
+  <input type="text" name="q" class="input" value="{{ query }}" placeholder="Title" aria-label="Title">
+  <button class="btn">{{ ui.icon("search") }}<span class="max-sm:sr-only">Search</span></button>
+</form>
+
+<form id="follow-form" hx-post="/following/follow" hx-target="#dialog-body" hx-disabled-elt="#follow-submit" class="mt-3">
+  <input type="hidden" name="title" value="{{ title }}">
+  <div class="space-y-1" role="radiogroup" aria-label="Which show">
+    {% for c in candidates %}
+    {% set info = [c.network, c.status, (c.seasons|length ~ " season" ~ ("s" if c.seasons|length != 1)) if c.seasons else "no seasons listed yet"]|select|join(" · ") %}
+    <label class="choice">
+      <input type="radio" name="tvdb_id" value="{{ c.tvdbId }}" class="sr-only" required {{ "checked" if chosen and chosen.tvdbId == c.tvdbId }}
+             hx-get="{{ options_url }}" hx-target="#follow-options" hx-trigger="change" hx-include="this">
+      {{ ui.thumb(c.poster, "show", "w-9") }}
+      <span class="min-w-0 flex-1">
+        <span class="block truncate font-medium">{{ c.title }} <span class="text-sm font-normal text-muted">{{ c.year or "" }}</span></span>
+        <span class="block text-xs text-muted">{{ info }}{% if c.following %} · <span class="text-ok">following</span>{% elif c.inLibrary %} · in library{% endif %}</span>
+      </span>
+    </label>
+    {% else %}
+    <p class="text-sm text-muted">Sonarr (TVDB) doesn't know this title yet. Try another name, or check back once TVDB lists it.</p>
+    {% endfor %}
+  </div>
+  <div id="follow-options">{% if options %}{% include "partials/follow_options.html" %}{% endif %}</div>
+</form>
+{% endblock %}
+{% block footer %}
+<footer class="dialog-actions">
+  <button type="button" class="btn" data-close-dialog>Cancel</button>
+  <button type="submit" id="follow-submit" form="follow-form" class="btn btn-primary" {{ "disabled" if not candidates }}>{{ ui.icon("bell") }}Follow</button>
+</footer>
+{% endblock %}

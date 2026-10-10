@@ -1,0 +1,26 @@
+{% extends "dialogs/_frame.html" %}
+{% block title %}Delete {{ plan.label }}?{% endblock %}
+{% block body %}
+<form id="delete-form" hx-post="/library/{{ plan.kind }}/{{ plan.id }}/delete" hx-target="#dialog-body"
+      hx-disabled-elt="#delete-submit">
+  <p class="text-sm">This permanently removes:</p>
+  <ul class="mt-2 space-y-1.5 text-sm">
+    <li class="flex gap-2">{{ ui.icon("folder", "size-4 mt-0.5 text-muted") }}
+      <span>The {{ plan.arr }} entry and library folder <span class="break-all text-muted">{{ plan.path }}</span> ({{ plan.sizeHuman }})</span></li>
+    {% for t in plan.torrents %}
+    <li class="flex gap-2">{{ ui.icon("download", "size-4 mt-0.5 text-muted") }}
+      <span>Torrent <b class="break-all font-medium">{{ t.name }}</b> and its data ({{ t.sizeHuman }})</span></li>
+    {% else %}
+    <li class="flex gap-2 text-muted">{{ ui.icon("download", "size-4 mt-0.5") }}No torrent left in qBittorrent</li>
+    {% endfor %}
+    <li class="flex gap-2">{{ ui.icon("x", "size-4 mt-0.5 text-muted") }}The Seerr request, so it can be requested again</li>
+  </ul>
+  <label class="check mt-4"><input type="checkbox" name="exclude"> Never let lists re-add it (import exclusion)</label>
+</form>
+{% endblock %}
+{% block footer %}
+<footer class="dialog-actions">
+  <button type="button" class="btn" data-close-dialog>Cancel</button>
+  <button type="submit" id="delete-submit" form="delete-form" class="btn btn-danger-solid">{{ ui.icon("trash") }}Delete permanently</button>
+</footer>
+{% endblock %}

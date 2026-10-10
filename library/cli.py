@@ -8,9 +8,11 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import core  # noqa: E402
-from core import LibraryError, human  # noqa: E402
+from medialib import Kind, LibraryError, Stack
+from medialib.fmt import human
+from medialib.importer import import_candidates, import_execute, import_plan
+from medialib.orphans import orphan_list, orphans_delete
+from medialib.titles import add_title, delete_execute, delete_plan, grabbed, overview
 
 
 def confirm(prompt: str, assume_yes: bool) -> bool:
@@ -38,7 +40,7 @@ def choose(items: list, label, assume_yes: bool, what: str):
             return items[int(ans) - 1]
 
 
-def find_in_library(k: core.Kind, query: str) -> list[dict]:
+def find_in_library(k: Kind, query: str) -> list[dict]:
     items = k.items()
     prefix = k.id_name + ":"
     if query.lower().startswith(prefix):
@@ -50,17 +52,17 @@ def find_in_library(k: core.Kind, query: str) -> list[dict]:
 
 
 def cmd_list(stack, _args) -> None:
-    data = core.overview(stack)
+    data = overview(stack)
     for key, name in (("movies", "Movies"), ("shows", "Shows")):
         print(f"\n{name} ({len(data[key])}):")
         for r in data[key]:
             size = r["sizeHuman"] or "not downloaded"
             extra = f"  episodes {r['episodes']}" if "episodes" in r else ""
             print(f"  {r['label']:55}  {size:>15}  {r['status']}{extra}")
-    o = data["orphans"]
-    if o["count"]:
-        print(f"\n{o['count']} orphan torrent(s), {o['sizeHuman']}: not linked to any title "
-              "(clean up with: ./media.sh orphans --delete)")
+    orphans = orphan_list(stack)
+    if orphans:
+        print(f"\n{len(orphans)} orphan torrent(s), {human(sum(t['size'] for t in orphans))}: "
+              "not linked to any title (clean up with: ./media.sh orphans --delete)")
 
 
 def cmd_add(stack, args) -> None:
@@ -75,15 +77,15 @@ def cmd_add(stack, args) -> None:
         results = exact[:1] if len(exact) == 1 else results
     pick = choose(results, lambda r: k.label(r) + ("  (already added)" if r.get("id") else ""),
                   args.yes, k.kind)
-    res = core.add_title(stack, args.kind, pick[k.id_key])
+    res = add_title(stack, args.kind, pick[k.id_key])
     print(res["message"])
     print("Waiting up to 60 s for a release to be grabbed...")
     deadline = time.time() + 60
     while time.time() < deadline:
         time.sleep(5)
-        titles = core.grabbed(stack, args.kind, res["id"])
-        if titles:
-            print("Grabbed: " + "; ".join(titles))
+        names = grabbed(stack, args.kind, res["id"])
+        if names:
+            print("Grabbed: " + "; ".join(names))
             print("subgate now checks it for English subs/audio: ./media.sh logs subgate")
             return
     print(f"Nothing grabbed yet. {k.arr.name} keeps looking (RSS + scheduled searches); "
@@ -94,7 +96,7 @@ def cmd_delete(stack, args) -> None:
     k = stack.kind(args.kind)
     item = choose(find_in_library(k, " ".join(args.query)), k.label, args.yes,
                   f"{k.kind} in {k.arr.name}")
-    plan = core.delete_plan(stack, args.kind, item["id"])
+    plan = delete_plan(stack, args.kind, item["id"])
     print(f"\nThis will permanently delete {plan['label']}:")
     print(f"  - {plan['arr']} entry + library folder {plan['path']} ({plan['sizeHuman']})")
     for t in plan["torrents"]:
@@ -106,7 +108,7 @@ def cmd_delete(stack, args) -> None:
         print(f"  - and add it to {plan['arr']}'s import exclusions (lists won't re-add it)")
     if not confirm("Proceed?", args.yes):
         sys.exit("Cancelled.")
-    res = core.delete_execute(stack, plan, args.exclude, log=lambda m: print("  " + m))
+    res = delete_execute(stack, plan, args.exclude, log=lambda m: print("  " + m))
     if not res["ok"]:
         print("NOT fully deleted:\n  - " + "\n  - ".join(res["problems"]))
         sys.exit(1)
@@ -115,7 +117,7 @@ def cmd_delete(stack, args) -> None:
 
 
 def cmd_orphans(stack, args) -> None:
-    orphans = core.orphan_list(stack)
+    orphans = orphan_list(stack)
     if not orphans:
         print("No orphan torrents.")
         return
@@ -128,7 +130,7 @@ def cmd_orphans(stack, args) -> None:
         return
     if not confirm(f"Delete these {len(orphans)} torrent(s) and their data?", args.yes):
         sys.exit("Cancelled.")
-    res = core.orphans_delete(stack, [t["hash"] for t in orphans])
+    res = orphans_delete(stack, [t["hash"] for t in orphans])
     if not res["ok"]:
         print("NOT fully deleted: " + ", ".join(res["still"]))
         sys.exit(1)
@@ -140,7 +142,7 @@ def cmd_import(stack, args) -> None:
     if not os.path.exists(path):
         raise LibraryError(f"{args.path} does not exist")
     query = " ".join(args.title) if args.title else None
-    cand = core.import_candidates(stack, args.kind, path, query, args.year)
+    cand = import_candidates(stack, args.kind, path, query, args.year)
     if not query:
         if not cand["guess"]:
             raise LibraryError("couldn't guess the title from the filename; pass --title")
@@ -156,7 +158,7 @@ def cmd_import(stack, args) -> None:
     if not args.yes and len(results) == 1 and not confirm(f"Import as {pick['label']}?", False):
         sys.exit("Cancelled.")
 
-    plan = core.import_plan(stack, args.kind, path, pick["extId"], args.replace)
+    plan = import_plan(stack, args.kind, path, pick["extId"], args.replace)
     print(f"\nImporting into {plan['folder']}:")
     for f in plan["files"]:
         tag = f.get("tag", "")
@@ -167,7 +169,7 @@ def cmd_import(stack, args) -> None:
         print(f"  NOTE: {w}")
     if not confirm("Proceed?", args.yes):
         sys.exit("Cancelled.")
-    res = core.import_execute(stack, args.kind, path, pick["extId"], args.replace,
+    res = import_execute(stack, args.kind, path, pick["extId"], args.replace,
                               args.monitor, log=lambda m: print("  " + m))
     print(f"Imported {res['label']} -> {res['imported']}. "
           "Jellyfin picks it up within a minute (real-time monitoring).")
@@ -201,7 +203,7 @@ def main() -> None:
     args = ap.parse_args()
 
     try:
-        stack = core.Stack()
+        stack = Stack()
         {"list": cmd_list, "add": cmd_add, "delete": cmd_delete, "orphans": cmd_orphans,
          "import": cmd_import}[args.cmd](stack, args)
     except LibraryError as e:

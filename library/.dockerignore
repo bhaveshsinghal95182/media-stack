@@ -1,3 +1,6 @@
 cli.py
-__pycache__
-test_*.py
+**/__pycache__
+.venv
+tests
+requirements-dev.txt
+web/static/app.css

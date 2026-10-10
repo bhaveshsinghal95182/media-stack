@@ -1,0 +1,51 @@
+{% import "macros/ui.html" as ui %}
+<div class="flex flex-wrap items-center gap-2">
+  <h2 class="section-title my-0 flex-1">Disk</h2>
+  {% if janitor %}
+  <button type="button" class="btn" hx-post="/cleanup/janitor/run" hx-swap="none" hx-disabled-elt="this">{{ ui.icon("refresh") }}Check now</button>
+  <button type="button" class="btn btn-danger" hx-post="/cleanup/janitor/force" hx-swap="none" hx-disabled-elt="this"
+          hx-confirm="Delete everything watched now, without waiting for the grace period? Favourites are kept.">Force cleanup</button>
+  {% endif %}
+</div>
+{% if not janitor %}
+<div class="panel mt-2 p-4 text-sm text-muted">Automatic cleanup is off.</div>
+{% else %}
+{% set disk = janitor.disk %}
+<div class="panel mt-2 p-4">
+  {% if disk.free is not none %}
+  {% set fill = "bg-danger" if disk.free < janitor.pauseBelow else "bg-warn" if disk.free < janitor.pauseBelow * 2 else "bg-ok" %}
+  <p><b class="font-semibold">{{ disk.free|gigabytes }} free</b> <span class="text-sm text-muted">of {{ disk.total|gigabytes }} (shared with the laptop)</span></p>
+  <div class="meter mt-2"><div class="{{ fill }}" style="width: {{ '%.1f'|format((1 - disk.free / disk.total) * 100) }}%"></div></div>
+  <p class="mt-2 text-sm {{ 'text-danger' if janitor.paused else 'text-muted' }}">
+    {% if janitor.paused %}Downloads paused ({{ janitor.paused }}) until {{ janitor.resumeAbove|gigabytes }} is free.
+    {% else %}Downloads pause automatically below {{ janitor.pauseBelow|gigabytes }} free and resume above {{ janitor.resumeAbove|gigabytes }}.{% endif %}
+  </p>
+  {% else %}
+  <p class="text-sm text-muted"><span class="spinner"></span>Measuring…</p>
+  {% endif %}
+</div>
+
+<h2 class="section-title">Watched · removed automatically</h2>
+<p class="note">Anything watched in Jellyfin (by any user) is removed {{ janitor.graceDays }} days after it was last played, and straight away when space runs low. Episodes go but the show stays followed; movies are deleted completely. Favourites in Jellyfin are never removed{% if janitor.kept %} ({{ janitor.kept }} kept){% endif %}; <b class="font-medium text-fg">Keep</b> marks one as a favourite.
+  {% if janitor.waitingTorrents %}{{ janitor.waitingTorrents }} season pack(s) are waiting for their remaining episodes to be watched before their space is freed.{% endif %}
+  {% if janitor.lastError %}<span class="text-danger">Last error: {{ janitor.lastError }}</span>{% endif %}</p>
+<div class="panel mt-3 overflow-hidden">
+  {% for s in janitor.scheduled %}
+  <div class="row">
+    <div class="min-w-0 flex-1">
+      <p class="truncate font-medium">{{ s.label }}</p>
+      <p class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+        <span class="pill">{{ s.kind }}</span>
+        <span>watched by {{ s.users|join(", ") }} · {{ "removed on the next check" if s.removeAt <= now else "removed " ~ s.removeAt|rel_time }}</span>
+      </p>
+    </div>
+    <button type="button" class="btn" hx-post="/cleanup/janitor/keep" hx-vals='{{ {"item_id": s.itemId, "user_id": s.userId}|tojson }}'
+            hx-swap="outerHTML" hx-disabled-elt="this">{{ ui.icon("heart") }}Keep</button>
+  </div>
+  {% else %}
+  {{ ui.empty("Nothing watched is waiting to be removed.") }}
+  {% endfor %}
+</div>
+<div class="log mt-3">{% for line in janitor.log %}{{ line.t|stamp }}  {{ line.msg }}
+{% else %}Nothing removed yet.{% endfor %}</div>
+{% endif %}

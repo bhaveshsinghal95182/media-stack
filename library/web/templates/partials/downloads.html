@@ -1,0 +1,27 @@
+{% import "macros/ui.html" as ui %}
+{% set base = "/releases/" ~ kind ~ "/" ~ item_id %}
+{% for d in downloads %}
+<div class="release">
+  <div class="min-w-0 flex-1">
+    <p class="release-title">{{ d.title }}</p>
+    <p class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted">
+      {% if d.episodes %}<span>{{ d.episodes|join(", ") }}</span>{% endif %}
+      {% if d.progress is not none %}<span class="font-medium text-accent">{{ "%.1f"|format(d.progress * 100) }}%</span>{% endif %}
+      {% if d.seeds is not none %}<span class="tabular-nums">{{ d.seeds }} seed{{ "" if d.seeds == 1 else "s" }} connected of {{ d.swarmSeeds }}</span>{% endif %}
+      {% if d.speed %}<span>{{ d.speed }}</span>{% endif %}
+      {% if d.eta %}<span>ETA {{ d.eta }}</span>{% endif %}
+      {% if d.state %}<span>{{ d.state }}</span>{% endif %}
+      {% if d.subgate %}<span>subgate: {{ d.subgate }}</span>{% endif %}
+    </p>
+    {% if d.progress is not none %}<progress class="progress mt-2" max="1" value="{{ d.progress }}"></progress>{% endif %}
+  </div>
+  <button type="button" class="btn btn-danger" hx-post="{{ base }}/drop" hx-vals='{{ {"download_id": d.downloadId}|tojson }}'
+          hx-swap="none" hx-disabled-elt="this"
+          hx-confirm="Remove this download and its data, blocklist it, and let it search for another release?">Drop &amp; try another</button>
+</div>
+{% else %}
+<p class="text-sm text-muted">Nothing downloading for this {{ "movie" if kind == "movie" else "show" }}.</p>
+{% endfor %}
+{% if downloads %}
+<label class="check mt-3"><input type="checkbox" id="replace-current" name="replace_current" checked> Picking another release replaces what's downloading now</label>
+{% endif %}

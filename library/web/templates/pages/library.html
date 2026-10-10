@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div data-filter-scope>
+  <div class="toolbar">
+    <label class="input-icon grow">
+      {{ ui.icon("search") }}
+      <input type="search" class="input" placeholder="Filter the library…" data-filter-text aria-label="Filter the library">
+    </label>
+    <button type="button" class="btn" hx-get="/library/list" hx-target="#library-list" hx-disabled-elt="this">
+      {{ ui.icon("refresh") }}<span class="max-sm:sr-only">Refresh</span>
+    </button>
+  </div>
+  <div id="library-list" hx-get="/library/list" hx-trigger="load, library-changed from:body">
+    {{ ui.loading("Loading the library…") }}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="toolbar" hx-get="/add/results" hx-target="#add-results" hx-indicator="#add-searching"
+      hx-trigger="submit, change[target.type=='radio']" hx-sync="this:replace">
+  <div class="seg" role="radiogroup" aria-label="Kind">
+    <label><input type="radio" name="kind" value="movie" checked>Movie</label>
+    <label><input type="radio" name="kind" value="show">Show</label>
+  </div>
+  <label class="input-icon grow">
+    {{ ui.icon("search") }}
+    <input type="search" name="q" class="input" placeholder="Search by title…" aria-label="Title" autofocus>
+  </label>
+  <button class="btn btn-primary">Search</button>
+</form>
+<p class="note">Adding searches for a release straight away. subgate then checks it for English subtitles or audio.</p>
+<p id="add-searching" class="htmx-indicator note mt-4"><span class="spinner"></span>Searching…</p>
+<div id="add-results" class="mt-4"></div>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% import "macros/ui.html" as ui %}
+{% if items %}
+<div class="card-grid mt-2">
+  {% for r in items %}
+  <article class="panel flex gap-3 p-3">
+    {{ ui.thumb(r.poster, "show", "w-20") }}
+    <div class="flex min-w-0 flex-1 flex-col">
+      <h3 class="font-semibold leading-snug">{{ r.title }}</h3>
+      <p class="text-xs text-muted">{{ r.year or "" }}</p>
+      <p class="mt-1 line-clamp-3 text-sm text-muted">{{ r.overview }}</p>
+      <div class="mt-auto pt-3">
+        <button type="button" class="btn btn-primary" hx-target="#dialog-body"
+                hx-get="/following/follow?{{ {'title': r.title, 'tvdb_id': r.extId}|urlencode }}">{{ ui.icon("bell") }}Follow</button>
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% elif query %}
+<div class="panel mt-2">{{ ui.empty("No results") }}</div>
+{% endif %}

@@ -1,0 +1,13 @@
+{% import "macros/ui.html" as ui %}
+{# Every dialog: a title bar, a scrolling body, and a <footer class="dialog-actions"> if it has buttons. #}
+<div class="flex max-h-[inherit] flex-col" {% block attrs %}{% endblock %}>
+  <header class="flex items-start gap-3 border-b border-line px-5 py-4">
+    <div class="min-w-0 flex-1">
+      <h2 id="dialog-title" class="text-base font-semibold leading-snug">{% block title %}{% endblock %}</h2>
+      {% block subtitle %}{% endblock %}
+    </div>
+    <button type="button" class="btn btn-ghost btn-icon -m-1.5" data-close-dialog aria-label="Close">{{ ui.icon("x") }}</button>
+  </header>
+  <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">{% block body %}{% endblock %}</div>
+  {% block footer %}{% endblock %}
+</div>

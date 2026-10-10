@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="note">Copy video files from <b class="font-medium text-fg">~/{{ label }}</b> into the library. Only folders with videos, video files and subtitles are shown here.</p>
+<nav class="mt-4 flex flex-wrap items-center gap-1 text-sm" aria-label="Folder">
+  <a href="/import" class="crumb" {% if not parts %}aria-current="page"{% endif %}>{{ label }}</a>
+  {% for part in parts %}
+  {{ ui.icon("chevron-right", "size-3.5 text-muted") }}
+  <a href="/import?{{ {'path': parts[:loop.index]|join('/')}|urlencode }}" class="crumb" {% if loop.last %}aria-current="page"{% endif %}>{{ part }}</a>
+  {% endfor %}
+</nav>
+<div class="panel mt-3 overflow-hidden">
+  {% for e in entries %}
+  {% set rel = (path ~ "/" if path) ~ e.name %}
+  <div class="row">
+    <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">
+      {{ ui.icon({"dir": "folder", "video": "file-video", "sub": "captions"}[e.type]) }}</span>
+    <div class="min-w-0 flex-1">
+      {% if e.type == "dir" %}
+      <a href="/import?{{ {'path': rel}|urlencode }}" class="line-clamp-2 break-all font-medium hover:text-accent">{{ e.name }}</a>
+      <p class="text-xs text-muted">{{ e.videos }} video{{ "s" if e.videos != 1 }} · {{ e.sizeHuman }}</p>
+      {% else %}
+      <p class="line-clamp-2 break-all font-medium">{{ e.name }}</p>
+      <p class="text-xs text-muted">{{ e.sizeHuman if e.type == "video" else "subtitle" }}</p>
+      {% endif %}
+    </div>
+    {% if e.type != "sub" %}
+    <div class="flex shrink-0 gap-1">
+      {% for kind, text in [("movie", "Movie"), ("show", "Show")] %}
+      <button type="button" class="btn" hx-get="/import/match?{{ {'kind': kind, 'path': rel}|urlencode }}" hx-target="#dialog-body">{{ text }}</button>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  {{ ui.empty("No videos here.") }}
+  {% endfor %}
+</div>
+{% endblock %}

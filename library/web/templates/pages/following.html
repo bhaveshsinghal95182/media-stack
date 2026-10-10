@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="toolbar" hx-get="/following/search" hx-target="#follow-results" hx-indicator="#follow-searching" hx-sync="this:replace">
+  <label class="input-icon grow">
+    {{ ui.icon("search") }}
+    <input type="search" name="q" class="input" placeholder="Follow any show or anime by title…" aria-label="Title">
+  </label>
+  <button class="btn btn-primary">Search</button>
+  <button type="button" class="btn" hx-get="/following/schedule" hx-target="#following-schedule" hx-disabled-elt="this">
+    {{ ui.icon("refresh") }}<span class="max-sm:sr-only">Refresh</span></button>
+</form>
+<p id="follow-searching" class="htmx-indicator note"><span class="spinner"></span>Searching…</p>
+<div id="follow-results"></div>
+<div id="following-schedule" hx-get="/following/schedule" hx-trigger="load, following-changed from:body">
+  {{ ui.loading() }}
+</div>
+{% endblock %}

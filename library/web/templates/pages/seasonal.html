@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<div data-filter-scope>
+  <div id="seasonal" hx-get="/seasonal/grid" hx-trigger="load">
+    {{ ui.loading("Loading the season from AniList…") }}
+  </div>
+</div>
+{% endblock %}

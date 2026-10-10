@@ -1,0 +1,31 @@
+{% import "macros/ui.html" as ui %}
+{% set base = "/releases/" ~ kind ~ "/" ~ item_id %}
+{% set arr = "Radarr" if kind == "movie" else "Sonarr" %}
+{% for r in releases %}
+{% set rejected = r.rejections or r.blocklisted %}
+<div class="release {{ 'opacity-70' if rejected }}">
+  <div class="min-w-0 flex-1">
+    <p class="release-title">{{ r.title }}</p>
+    <p class="mt-1.5 flex flex-wrap items-center gap-1">
+      <span class="pill">{{ r.quality }}</span>
+      <span class="pill">{{ r.sizeHuman }}</span>
+      <span class="pill tabular-nums">▲ {{ r.seeders if r.seeders is not none else "?" }} ▼ {{ r.leechers if r.leechers is not none else "?" }}</span>
+      {% if r.scope %}<span class="pill">{{ r.scope }}</span>{% endif %}
+      {% if r.languages %}<span class="pill">{{ r.languages|join(", ") }}</span>{% endif %}
+      <span class="text-xs text-muted max-sm:hidden">{{ r.indexer }}{% if r.age is not none %} · {{ r.age }}d old{% endif %}</span>
+    </p>
+    {% if r.rejections %}<p class="mt-1 text-xs text-warn">{{ r.rejections|join(" · ") }}</p>{% endif %}
+  </div>
+  {% if r.current %}
+  <button type="button" class="btn" disabled>Downloading</button>
+  {% else %}
+  <button type="button" class="btn {{ '' if r.rejections else 'btn-primary' }}" hx-post="{{ base }}/grab"
+          hx-vals='{{ {"guid": r.guid, "indexer_id": r.indexerId}|tojson }}' hx-include="#replace-current"
+          hx-swap="outerHTML" hx-disabled-elt="this"
+          {% if r.rejections %}hx-confirm="{{ arr }} would normally skip this one: {{ r.rejections|join('; ') }}. Download it anyway?"{% endif %}>
+    {{ ui.icon("download") }}Download</button>
+  {% endif %}
+</div>
+{% else %}
+<p class="text-sm text-muted">No releases found for this {{ "movie" if kind == "movie" else "season" }} ({{ searched }} results were for other titles).</p>
+{% endfor %}

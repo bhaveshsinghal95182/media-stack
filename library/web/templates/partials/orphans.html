@@ -1,0 +1,16 @@
+{% import "macros/ui.html" as ui %}
+<div class="panel overflow-hidden">
+  {% for t in orphans %}
+  <label class="row cursor-pointer hover:bg-surface-2/60">
+    <input type="checkbox" name="torrent" value="{{ t.hash }}" class="size-4 shrink-0 accent-accent">
+    <span class="min-w-0 flex-1">
+      <span class="block break-all font-medium">{{ t.name }}</span>
+      <span class="block text-xs text-muted">{{ t.sizeHuman }} · {{ t.state }}{% if t.category %} · {{ t.category }}{% endif %}</span>
+    </span>
+  </label>
+  {% else %}
+  {{ ui.empty("No leftover torrents. Nice and tidy.") }}
+  {% endfor %}
+</div>
+{# Keep the nav badge in step with what was just counted. #}
+{{ ui.badge("orphan-badge", orphan_count, "/cleanup/orphans/count", ["library-changed"], oob=True) }}

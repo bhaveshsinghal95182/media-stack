@@ -24,7 +24,7 @@ Whisparr is not deployed), so treat the code and live config as the truth.
    retry a qB login in a loop. qB 5.x answers a *successful* login with HTTP
    204 and an empty body, not `Ok.`, so don't mistake that for a failure and
    retry. The easiest safe way to talk to qB is through the library container:
-   `docker exec media-library python3 -c "import core; print(core.Stack().qb.call('app/preferences'))"`.
+   `docker exec media-library python3 -c "from medialib import Stack; print(Stack().qb.call('app/preferences'))"`.
 3. **The library page locks a client out for 10 minutes after 10 bad logins.**
    Read `LIBRARY_USERNAME`/`LIBRARY_PASSWORD` from `.env`. Don't guess them.
 4. **Never delete the user's media, torrents or "orphans" without explicit
@@ -34,7 +34,7 @@ Whisparr is not deployed), so treat the code and live config as the truth.
    sensitive personal files** (ID documents, API-key CSVs). The library must
    only ever list folders, video files and subtitle files there, must never
    serve file contents, and must hide symlinks that resolve outside it
-   (`library/web.py` `browse()` / `resolve_import_path()`). Keep it that way.
+   (`library/medialib/importer.py` `ImportFolder`). Keep it that way.
 6. **No commits without the user seeing the file list first.** Never commit
    `.env`, `config/`, `backup/` or `__pycache__/`.
 7. **No global `docker system prune` / `volume prune`.** The scratch volume and
@@ -109,19 +109,33 @@ gpuswitch/
                         on AC loss stops transcodes on the AC hardware. python:3.13-alpine, script bind-mounted, no build
   setup-nvidia-runtime.sh  root one-off: nvidia-container-toolkit + docker runtime (needed before nvenc)
 library/
-  core.py               ALL logic: Settings, http clients (Arr, QBit), Volume, Stack, overview,
-                        add, delete, releases, follow/following, seasonal (AniList), orphans, import
-  web.py                stdlib HTTP server + JSON API, auth, background jobs; serves index.html
-  index.html            the whole UI (vanilla JS, no build step). Tabs: Library, Add, Watchlist,
-                        Seasonal, Following, Import, Cleanup. Dialogs: Releases, Follow, Delete, Import
-  watcher.py            AiringWatcher: searches just-aired monitored episodes on a schedule
-  watchlist.py          Watchlist: thread-safe JSON store of titles saved for later (no Arr involvement)
-  janitor.py            Janitor: removes watched episodes/movies (Jellyfin play state) + disk-space guard
+  medialib/             domain logic, STDLIB ONLY (cli.py imports it on the host)
+    settings.py stack.py  Settings from env/.env; Stack = the clients; Kind = movie/show specifics
+    clients.py volume.py  http_json, Arr, QBit, Jellyfin; Volume (local /data or docker exec)
+    titles.py             overview, add_title, delete_plan/delete_execute
+    releases.py           downloads, release_info/search/grab/drop
+    following.py          follow/unfollow/following, refresh_series, search_episodes
+    seasonal.py           AniList + Fribb's TVDB/TMDB mapping
+    importer.py           ImportFolder (the ~/Downloads guard), import_candidates/plan/execute
+    orphans.py            claimed_hashes, orphan_list/orphans_delete
+    tv_access.py          Hide on TV (Jellyfin BlockedTags)
+    rescue.py             ImportRescuer (watcher's before_cycle)
+    watcher.py watchlist.py janitor.py jobs.py   background services, JobRunner
+    fmt.py files.py state.py errors.py           small helpers
+  web/                  FastAPI + Jinja + htmx; a thin layer over medialib
+    app.py              create_app(): auth dependency, SecurityMiddleware, error handlers
+    services.py         Services: watchlist, JobRunner, op_lock, watcher, janitor, per-thread Stack
+    security.py         Basic auth + lockout; HX-Request required on POST
+    render.py           render()/notify(): templates, toasts and events via HX-Trigger
+    routes/*.py         one router per tab, plus jobs.py
+    templates/          base.html, pages/, partials/ (htmx swaps), dialogs/, macros/ui.html
+    styles/app.css      Tailwind v4 input (component classes); built into static/app.css by Docker
+    static/             app.js (dialog, toasts, filters, multi-select), vendored htmx.min.js
   cli.py                argparse front-end used by media.sh (runs on the HOST)
-  test_library.py, test_watcher.py, test_watchlist.py, test_janitor.py
+  tests/                unittest; test_web.py needs requirements-dev.txt and skips without it
 ```
 
-`core.py` runs in two places:
+`medialib` runs in two places:
 
 - **In the library container.** `LIBRARY_LOCAL_DATA=1`; `/data` is mounted, and
   the service URLs come from compose env.
@@ -166,10 +180,23 @@ Keep both paths working.
 
 - **Auth:** HTTP Basic. The password must match `LIBRARY_PASSWORD`. If
   `LIBRARY_USERNAME` is empty, any username is accepted.
-- **CSRF:** state-changing POSTs need an `X-Requested-With` header.
-- **Jobs:** long POSTs (add, delete, import, follow) run as background jobs.
-  The page polls `/api/jobs/<id>`. Grab, drop and unfollow take `_job_lock`
-  directly.
+- **CSRF:** every non-GET request needs `HX-Request: true` (htmx sends it;
+  a cross-site form can't). `SecurityMiddleware` returns 403 otherwise.
+- **htmx conventions:** routes return HTML fragments. Toasts and refreshes go
+  in the `HX-Trigger` header (`render(..., toast=, events=)` / `notify()`);
+  sections reload on events like `library-changed from:body`. Errors: an action
+  gets a 4xx plus an error toast; an htmx GET gets `partials/error.html` with
+  200, so it swaps in; a full page gets `pages/error.html`. Anything swapped
+  into `#dialog-body` opens the dialog. Tailwind only sees literal class names
+  in templates, so never build classes like `bg-{{ tone }}`.
+- **Jobs:** long POSTs (add, delete, import, follow, send, orphan delete) run as
+  background jobs (`medialib.jobs.JobRunner`). `partials/job.html` polls
+  `/jobs/<id>` every second and fires the job's refresh event when done.
+  Grab, drop, unfollow and the janitor take `Services.op_lock` directly.
+- **Hide on TV** (`tv_access.py`): the tag `hidden-from-tv` goes on the
+  Jellyfin series (and is locked against metadata refresh); the `TV_USER`
+  account (default `tv`) gets it in `BlockedTags`, so the account can neither
+  see nor play the series.
 - **Delete** (`delete_plan` → `delete_execute`). Because imports are hardlinks,
   freeing disk space takes all of these:
   - remove the Arr entry with its files;
@@ -229,7 +256,7 @@ Keep both paths working.
     episodes only" with a warning.
   - **Caching.** AniList responses are cached for 30 minutes. `_cached` serves
     stale data when a fetch fails.
-- **Watcher** (`watcher.py`, started by `web.main()` unless `LIBRARY_WATCHER=0`):
+- **Watcher** (`watcher.py`, started by `Services.start_background()` unless `LIBRARY_WATCHER=0`):
   - Every 300 s it reads Sonarr's calendar for the last 7 days and the queue.
   - It sends `EpisodeSearch` for monitored, aired episodes that have no file
     and aren't queued.
@@ -239,7 +266,7 @@ Keep both paths working.
   - State is saved atomically to `/state/watcher.json`.
   - Queue records with no `episodeId` (unknown items) are mapped to episodes
     through `/history?downloadId=` grabbed events, so they count as queued.
-  - Before each cycle it runs **`core.rescue_imports`**:
+  - Before each cycle it runs **`rescue.ImportRescuer`**:
     - Targets downloads that are `importBlocked`, complete and passed by subgate
       (`subgate-ok`/`-skipped`).
     - Takes the episodes from Sonarr's grab history and imports the best copy
@@ -249,7 +276,7 @@ Keep both paths working.
       already have a file and retries a download at most hourly.
     - A pack whose files don't parse is logged for a manual import.
   - Sonarr's own RSS sync runs at 10 min, the minimum Sonarr allows.
-- **Watchlist** (`watchlist.py` store, `core.watchlist_view` / `watchlist_send`):
+- **Watchlist** (`watchlist.py`: the store, `watchlist_view` and `watchlist_send`):
   - Titles saved for later live only in `/state/watchlist.json`
     (`config/library/`), keyed by (kind, extId). extId is the TMDB id for
     movies and the TVDB id for shows.
@@ -257,7 +284,7 @@ Keep both paths working.
     `add_title`, which adds and searches; a show gets every episode.
   - Each title that's sent successfully is removed from the list. Failed ones
     stay.
-  - `/api/search` and `/api/seasonal` mark results with `onWatchlist`.
+  - Add-tab search results and Seasonal mark titles with `onWatchlist`.
   - The file is on the host disk on purpose, so `destroy` and Docker prunes
     can't touch it.
 - **Janitor** (`janitor.py`; it **deletes media automatically**, and the user asked
@@ -289,7 +316,7 @@ Keep both paths working.
        Season packs therefore wait for the whole pack.
   - **Movies.** `delete_plan` + `delete_execute`.
   - **Limits.** Paths must be under `/data/media/`; at most 50 removals per
-    pass. Holds web's `_job_lock` while deleting.
+    pass. Holds `Services.op_lock` while deleting.
   - **Jellyfin API.** Jellyfin is 12.x. Use the header
     `Authorization: MediaBrowser Token="<key>"`; `X-Emby-Token` returns 401.
     The key comes from `JELLYFIN_API_KEY`, falling back to the one Seerr keeps
@@ -374,17 +401,27 @@ docker compose up -d --build library     # after editing library/*
 docker compose up -d --build subgate     # after editing subgate/*
 docker compose up -d <svc>               # after editing .env (restart does NOT re-read env)
 
-# tests: stdlib unittest, run from inside each folder
-(cd library && python3 -m unittest -q)   # test_library.py, test_watcher.py, test_watchlist.py, test_janitor.py
+# tests: unittest
+(cd library && python3 -m unittest discover -s tests -t .)   # medialib only; test_web.py skips
+(cd library && .venv/bin/python -m unittest discover -s tests -t .)   # all, in a venv with requirements-dev.txt
 (cd subgate && python3 -m unittest -q)
+
+# library UI dev loop (venv + tailwindcss standalone binary, v4)
+(cd library && tailwindcss --input web/styles/app.css --output web/static/app.css --watch)
+(cd library && LIBRARY_PASSWORD=dev LIBRARY_WATCHER=0 LIBRARY_JANITOR=0 IMPORT_ROOT=~/Downloads \
+   WATCHLIST_STATE=/tmp/watchlist.json .venv/bin/uvicorn web.app:create_app --factory --host 127.0.0.1 --port 8098)
 ```
 
-- **Dependencies:** both services are stdlib only, so don't add pip
-  dependencies. subgate's image needs `ffprobe`.
-- **Dockerfile COPY lists:** `library/Dockerfile` copies files by name
-  (`core.py web.py watcher.py watchlist.py janitor.py index.html`). A new module must be added there.
+- **Dependencies:** subgate and `library/medialib` are stdlib only (subgate's
+  image needs `ffprobe`; medialib must import on the host's plain Python for
+  `cli.py`). `library/web` may use the pinned packages in
+  `library/requirements.txt`. Keep them pinned.
+- **library Dockerfile:** stage 1 downloads the Tailwind standalone CLI and
+  builds `app.css` from `web/styles` + `web/templates`; stage 2 copies the
+  `medialib/` and `web/` folders whole. `web/static/app.css` is gitignored and
+  only built.
 - **Restart loops:** if `.env` lacks a key, both custom containers exit at
-  startup and restart-loop. `core.Stack()` and subgate's `Config` fail fast on
+  startup and restart-loop. `Stack()` and subgate's `Config` fail fast on
   missing settings.
 - **Checking the UI:** start headless Chromium with
   `--remote-debugging-port`, set `Network.setExtraHTTPHeaders` with the Basic
@@ -395,7 +432,7 @@ docker compose up -d <svc>               # after editing .env (restart does NOT 
 
 | Task | Where |
 |---|---|
-| New library feature | function in `core.py` → route in `web.py` (`do_GET`/`do_POST`) → UI in `index.html` → test in `test_library.py` |
+| New library feature | function in a `medialib/` module (+ test in `tests/`) → route in `web/routes/<tab>.py` → template in `web/templates/` (+ `tests/test_web.py` for web behaviour) |
 | Change what subgate accepts | `decide_streams` / `classify_sub_path` in `subgate.py` + tests + `subgate/README.md` |
 | Stuck download | Library → Releases dialog, or `release_drop` |
 | Title still "available" in Seerr after delete | delete via library (clears Seerr), or Seerr → Manage → Clear Data |

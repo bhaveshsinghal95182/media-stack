@@ -1,0 +1,85 @@
+{% import "macros/ui.html" as ui %}
+{% set label = season|capitalize ~ " " ~ year %}
+{% set airing_status = {"FINISHED": "Finished airing", "NOT_YET_RELEASED": "Not yet airing",
+                        "CANCELLED": "Cancelled", "HIATUS": "On hiatus"} %}
+{# Re-requests this whole partial: the season, format and sort travel in the form. #}
+<form id="seasonal-form" class="toolbar" hx-get="/seasonal/grid" hx-target="#seasonal" hx-trigger="change[target.name]"
+      hx-indicator="#seasonal-loading" hx-sync="this:replace">
+  <input type="hidden" name="season" value="{{ season }}">
+  <input type="hidden" name="year" value="{{ year }}">
+  <div class="flex items-center gap-1">
+    <button type="button" class="btn btn-icon" aria-label="Previous season" hx-get="/seasonal/grid" hx-target="#seasonal"
+            hx-include="#seasonal-form" hx-vals='{{ {"season": prev[0], "year": prev[1]}|tojson }}' hx-indicator="#seasonal-loading">{{ ui.icon("chevron-left") }}</button>
+    <h1 class="min-w-28 text-center font-semibold">{{ label }}</h1>
+    <button type="button" class="btn btn-icon" aria-label="Next season" hx-get="/seasonal/grid" hx-target="#seasonal"
+            hx-include="#seasonal-form" hx-vals='{{ {"season": next[0], "year": next[1]}|tojson }}' hx-indicator="#seasonal-loading">{{ ui.icon("chevron-right") }}</button>
+  </div>
+  <div class="seg" role="radiogroup" aria-label="Format">
+    {% for value, text in [("series", "Series"), ("movie", "Movies"), ("all", "All")] %}
+    <label><input type="radio" name="format" value="{{ value }}" {{ "checked" if format == value }}>{{ text }}</label>
+    {% endfor %}
+  </div>
+  <select name="sort" class="input w-auto" aria-label="Sort">
+    {% for value, text in [("popularity", "Most popular"), ("score", "Highest rated"), ("airing", "Airing soonest")] %}
+    <option value="{{ value }}" {{ "selected" if sort == value }}>{{ text }}</option>
+    {% endfor %}
+  </select>
+  <label class="input-icon grow">
+    {{ ui.icon("search") }}
+    <input type="search" class="input" placeholder="Filter…" data-filter-text aria-label="Filter" hx-preserve id="seasonal-filter">
+  </label>
+</form>
+<p class="note">{{ label }}'s anime from AniList. Follow a series and Sonarr grabs each new episode as it comes out; subgate still checks every one for English subs or audio.</p>
+<p id="seasonal-loading" class="htmx-indicator note mt-3"><span class="spinner"></span>Loading…</p>
+{% if mapError %}
+<p class="note mt-3 text-warn">Couldn't load the TVDB mapping ({{ mapError }}); Follow will search Sonarr by title.</p>
+{% endif %}
+
+<div class="card-grid mt-4" data-filter-group hx-get="/seasonal/grid" hx-include="#seasonal-form"
+     hx-target="#seasonal" hx-trigger="following-changed from:body">
+  {% for a in items %}
+  {% set meta = [a.studios[0] if a.studios, a.format.replace("_", " ") if a.format, a.episodes ~ " eps" if a.episodes,
+                 "★ " ~ a.score ~ "%" if a.score]|select|join(" · ") %}
+  <article class="panel flex flex-col" data-item
+           data-text="{{ [a.title, a.romaji or '', a.studios|join(' '), a.genres|join(' ')]|join(' ')|lower }}">
+    <div class="flex gap-3 p-3">
+      {{ ui.thumb(a.cover, "show", "w-24") }}
+      <div class="min-w-0 flex-1">
+        <h3 class="font-semibold leading-snug">{{ a.title }}</h3>
+        {% if a.romaji and a.romaji != a.title %}<p class="truncate text-xs text-muted">{{ a.romaji }}</p>{% endif %}
+        <p class="mt-1 text-xs text-muted">{{ meta }}</p>
+        <p class="mt-1 text-sm font-medium text-accent">
+          {% if a.nextAiringAt %}Ep {{ a.nextEpisode }}{% if a.episodes %} of {{ a.episodes }}{% endif %} {{ a.nextAiringAt|rel_time }}
+          {% else %}{{ airing_status.get(a.status, "") }}{% endif %}
+        </p>
+        <p class="mt-1.5 flex flex-wrap gap-1">{% for g in a.genres[:3] %}<span class="pill">{{ g }}</span>{% endfor %}</p>
+      </div>
+    </div>
+    <p class="line-clamp-4 whitespace-pre-line break-words px-3 text-sm text-muted">{{ a.synopsis }}</p>
+    <div class="mt-auto flex flex-wrap items-center gap-2 p-3">
+      {% set wl_item = {"kind": "movie" if a.movie else "show", "ext_id": a.tmdbId if a.movie else a.tvdbId,
+                        "title": a.title, "year": year, "poster": a.cover or "", "overview": a.synopsis} %}
+      {% if a.movie %}
+        {% if a.inLibrary %}<span class="pill pill-ok">in library</span>
+        {% elif a.tmdbId %}
+        <button type="button" class="btn btn-primary" hx-post="/add" hx-vals='{{ {"kind": "movie", "ext_id": a.tmdbId}|tojson }}'
+                hx-swap="outerHTML" hx-disabled-elt="this">{{ ui.icon("plus") }}Add movie</button>
+        {{ ui.watchlist_button(wl_item, saved=a.onWatchlist) }}
+        {% else %}<span class="text-xs text-muted">not matched to TMDB</span>{% endif %}
+      {% else %}
+        {% set follow_url = "/following/follow?" ~ a.followQuery %}
+        {% if a.following %}
+        <span class="pill pill-ok">{{ ui.icon("check", "size-3") }}following</span>
+        <button type="button" class="btn" hx-get="{{ follow_url }}" hx-target="#dialog-body">Change</button>
+        {% else %}
+        <button type="button" class="btn btn-primary" hx-get="{{ follow_url }}" hx-target="#dialog-body">{{ ui.icon("bell") }}Follow</button>
+        {% if a.tvdbId and not a.inLibrary %}{{ ui.watchlist_button(wl_item, saved=a.onWatchlist) }}{% endif %}
+        {% endif %}
+      {% endif %}
+      {% if a.url %}<a href="{{ a.url }}" target="_blank" rel="noopener noreferrer" hx-boost="false"
+                      class="ml-auto inline-flex items-center gap-1 text-xs text-muted hover:text-fg">AniList {{ ui.icon("external-link", "size-3") }}</a>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+  <div class="panel sm:col-span-full" data-filter-empty {{ "hidden" if items }}>{{ ui.empty("Nothing here matches.") }}</div>
+</div>

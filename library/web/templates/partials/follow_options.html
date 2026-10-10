@@ -1,0 +1,28 @@
+{# What to get once a show is picked in the follow dialog. #}
+<h3 class="subhead mt-5">What to get</h3>
+{% if options.unsure %}
+<p class="note mb-2 text-warn">AniList and TVDB number this show's seasons differently, so check the season before picking the first option.</p>
+{% endif %}
+<div class="space-y-1">
+  <label class="choice items-start">
+    <input type="radio" name="mode" value="season" id="mode-season" class="mt-1 accent-accent" {{ "checked" if not options.unsure }}>
+    <span class="text-sm">
+      Season
+      <select name="season" class="input mx-1 inline-block w-auto py-0.5" data-check="mode-season" aria-label="Season">
+        {% for n in options.seasons %}<option {{ "selected" if n == options.default_season }}>{{ n }}</option>{% endfor %}
+      </select>
+      so far, then each new episode
+      <span class="block text-xs text-muted">Grabs the episodes already out, then new ones as they air. Best for something airing now.</span>
+    </span>
+  </label>
+  <label class="choice items-start">
+    <input type="radio" name="mode" value="new" class="mt-1 accent-accent" {{ "checked" if options.unsure }}>
+    <span class="text-sm">Only new episodes from now on
+      <span class="block text-xs text-muted">Nothing is downloaded until the next episode airs.</span></span>
+  </label>
+  <label class="choice items-start">
+    <input type="radio" name="mode" value="all" class="mt-1 accent-accent">
+    <span class="text-sm">Every episode of the show
+      <span class="block text-xs text-muted">All seasons now, then new ones as they air.</span></span>
+  </label>
+</div>

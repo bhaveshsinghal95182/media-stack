@@ -332,6 +332,9 @@ Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
     Use it when a download crawls.
   - **Delete**: removes the movie/show, its files, its torrent and the Seerr
     request, then checks that it's really gone.
+  - **Hide on TV** (the TV icon on a show): the Jellyfin `tv` account can no
+    longer see or play that show. Press it again (crossed-out eye) to undo.
+    Another account name goes in `.env` as `TV_USER`.
 - **Add**: search and download a movie or show, or **Save for later**.
 - **Watchlist**: titles you saved for later. Nothing downloads until you press
   **Download** (one title) or tick several and **Download selected**. They

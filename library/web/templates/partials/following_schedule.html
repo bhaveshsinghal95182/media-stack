@@ -1,0 +1,62 @@
+{% import "macros/ui.html" as ui %}
+<h2 class="section-title">Coming up &amp; just aired</h2>
+<div class="panel overflow-hidden">
+  {% for day, episodes in days %}
+  <h3 class="day-head">{{ day }}</h3>
+  {% for ep in episodes %}
+  <div class="row">
+    <span class="w-11 shrink-0 text-sm tabular-nums text-muted">{{ ep.airAt|clock if ep.airAt else "" }}</span>
+    {{ ui.thumb(ep.poster, "show", "w-9") }}
+    <div class="min-w-0 flex-1">
+      <p class="truncate font-medium">{{ ep.series }}
+        <span class="text-sm font-normal text-muted">{{ ep.code }}{% if ep.absolute %} (#{{ ep.absolute }}){% endif %}</span></p>
+      <p class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
+        {{ ui.episode_pill(ep.status) }}
+        {% if ep.airAt %}<span>{{ ep.airAt|rel_time }}</span>{% endif %}
+        {% if ep.title and ep.title != "TBA" %}<span class="truncate">· {{ ep.title }}</span>{% endif %}
+        {% if ep.watch %}<span>· searched {{ ep.watch.attempts }}×{% if ep.watch.next %}, next {{ ep.watch.next|clock }}{% endif %}</span>{% endif %}
+      </p>
+    </div>
+    {% if ep.status == "aired, looking" %}
+    <button type="button" class="btn" hx-post="/following/episodes/{{ ep.id }}/search" hx-swap="outerHTML" hx-disabled-elt="this">
+      {{ ui.icon("search") }}<span class="max-sm:sr-only">Search now</span></button>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  {{ ui.empty("Nothing aired in the last 2 days or comes out in the next 2 weeks for the shows you follow.") }}
+  {% endfor %}
+</div>
+
+<h2 class="section-title">Following <span class="font-normal normal-case tracking-normal">{{ shows|length }}</span></h2>
+<div class="panel overflow-hidden">
+  {% for s in shows %}
+  <div class="row">
+    {{ ui.thumb(s.poster, "show") }}
+    <div class="min-w-0 flex-1">
+      <p class="truncate font-medium">{{ s.title }} <span class="text-sm font-normal text-muted">{{ s.year or "" }}</span></p>
+      <p class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+        {% if s.anime %}<span class="pill">anime</span>{% endif %}
+        <span class="pill">{{ s.episodes }} eps</span>
+        <span>{% if s.nextAiring %}next {{ s.nextAiring|rel_time }}{% elif s.status == "ended" %}ended{% else %}no date yet{% endif %}</span>
+        {% if s.network %}<span>· {{ s.network }}</span>{% endif %}
+      </p>
+    </div>
+    <button type="button" class="btn btn-danger" hx-post="/following/{{ s.id }}/unfollow" hx-swap="none" hx-disabled-elt="this"
+            hx-confirm="Stop following {{ s.title }}? Episodes already downloaded stay.">Unfollow</button>
+  </div>
+  {% else %}
+  <div class="empty">Not following anything yet. Pick something in <a href="/seasonal" class="text-accent underline-offset-2 hover:underline">Seasonal</a> or search above.</div>
+  {% endfor %}
+</div>
+
+<h2 class="section-title">Watcher</h2>
+{% if watcher %}
+<p class="note">Sonarr checks the indexers' new-upload feeds every 10 minutes. On top of that, the watcher searches every indexer for each episode that has aired but isn't found yet: 5 min, 20 min, 45 min, 1.5 h, 3 h, 6 h and 12 h after it airs, then twice a day for a week.
+  {% if watcher.lastRun %}Last check {{ watcher.lastRun|rel_time }}.{% endif %}
+  {% if watcher.lastError %}<span class="text-danger">Last error: {{ watcher.lastError }}</span>{% endif %}</p>
+<div class="log mt-3">{% for line in watcher.log %}{{ line.t|stamp }}  {{ line.msg }}
+{% else %}No searches yet.{% endfor %}</div>
+{% else %}
+<p class="note text-warn">The airing watcher is off; only Sonarr's feed checks are running.</p>
+{% endif %}

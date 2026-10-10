@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="janitor" hx-get="/cleanup/janitor" hx-trigger="load, janitor-changed from:body delay:8s">
+  {{ ui.loading() }}
+</div>
+
+<div class="mt-8 flex flex-wrap items-center gap-2">
+  <h2 class="section-title my-0 flex-1">Leftover torrents</h2>
+  <button type="button" class="btn" data-select-all="#orphans">Select all</button>
+  <button type="button" class="btn btn-danger-solid" disabled data-selection="#orphans"
+          hx-post="/cleanup/orphans/delete" hx-include="#orphans input[name=torrent]:checked" hx-target="#dialog-body"
+          hx-confirm="Delete the selected torrents and their data?">{{ ui.icon("trash") }}Delete selected <span data-count></span></button>
+</div>
+<p class="note mt-2">Torrents in qBittorrent that aren't linked to any movie or show, usually left over after something was removed. Deleting removes the torrent and its data.</p>
+<div id="orphans" class="mt-3" hx-get="/cleanup/orphans" hx-trigger="load, library-changed from:body">
+  {{ ui.loading("Checking qBittorrent…") }}
+</div>
+{% endblock %}

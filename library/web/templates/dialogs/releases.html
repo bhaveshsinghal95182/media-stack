@@ -1,0 +1,29 @@
+{% extends "dialogs/_frame.html" %}
+{% set base = "/releases/" ~ info.kind ~ "/" ~ info.id %}
+{% set is_movie = info.kind == "movie" %}
+{% block title %}Releases · {{ info.label }}{% endblock %}
+{% block body %}
+<h3 class="subhead">Downloading now</h3>
+<div id="downloads" hx-get="{{ base }}/downloads" hx-trigger="downloads-changed from:body delay:3s">
+  {% with kind=info.kind, item_id=info.id, downloads=info.downloads %}{% include "partials/downloads.html" %}{% endwith %}
+</div>
+
+<h3 class="subhead mt-6">Other releases</h3>
+<form class="flex flex-wrap items-center gap-2" hx-get="{{ base }}/search" hx-target="#release-list"
+      hx-indicator="#release-searching" hx-disabled-elt="find button">
+  {% if not is_movie %}
+  <select name="season" class="input w-auto" aria-label="Season">
+    {% for s in info.seasons %}
+    <option value="{{ s.number }}" {{ "selected" if s.number == latest_season }}>{{ s.label }} ({{ s.have }} on disk)</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+  <button class="btn btn-primary">{{ ui.icon("search") }}{{ "Search again" if is_movie else "Search" }}</button>
+</form>
+{% if info.hasFile %}
+<p class="note mt-3 text-warn">Already on disk. Radarr only swaps the file if the new release is a quality upgrade; to replace it with anything else, delete the movie first.</p>
+{% endif %}
+<p class="note mt-3">Seeder numbers come from the indexers and are often out of date. Whatever you pick still goes through subgate's English check.</p>
+<p id="release-searching" class="htmx-indicator note mt-3"><span class="spinner"></span>Searching every indexer… this can take a minute.</p>
+<div id="release-list" class="mt-2" {% if is_movie %}hx-get="{{ base }}/search" hx-trigger="load" hx-indicator="#release-searching"{% endif %}></div>
+{% endblock %}

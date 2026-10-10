@@ -3,7 +3,9 @@ import os
 import tempfile
 import unittest
 
-import janitor as j
+from medialib import janitor as j
+from medialib.clients import QBit
+from medialib.fmt import parse_utc
 
 DAY = 86400
 
@@ -15,10 +17,10 @@ def jf_item(path, typ="Episode", played=None, fav=False, **kw):
 
 
 class Helpers(unittest.TestCase):
-    def test_parse_jf_date(self):
-        self.assertEqual(j.parse_jf_date("1970-01-02T00:00:00.0000000Z"), DAY)
-        self.assertIsNone(j.parse_jf_date(None))
-        self.assertIsNone(j.parse_jf_date("yesterday"))
+    def test_parse_jellyfin_date(self):
+        self.assertEqual(parse_utc("1970-01-02T00:00:00.0000000Z"), DAY)
+        self.assertIsNone(parse_utc(None))
+        self.assertIsNone(parse_utc("yesterday"))
 
     def test_merge_latest_play_wins_and_favourites(self):
         p = "/data/media/tv/Show/Season 01/e2.mkv"
@@ -81,8 +83,11 @@ class FakeSonarr:
             os.remove(self.files.pop(int(path.rsplit("/", 1)[1])))
 
 
-class FakeQB:
+class FakeQB(QBit):
+    """The real client over canned API answers."""
+
     def __init__(self, save_path, names):
+        super().__init__("http://qbit", "user", "pass")
         self.save_path, self.names, self.deleted = save_path, names, []
 
     def torrents(self):

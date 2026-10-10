@@ -6,7 +6,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-import watchlist
+from medialib import watchlist
 
 
 class WatchlistItems(unittest.TestCase):

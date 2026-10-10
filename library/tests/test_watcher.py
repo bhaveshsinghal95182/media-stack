@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-import watcher
+from medialib import watcher
+from medialib.clients import Arr
+from medialib.fmt import parse_utc
 
 
 AIR = datetime(2026, 10, 4, 13, 30, tzinfo=timezone.utc)
@@ -21,10 +23,13 @@ def episode(episode_id=1, aired=AIR, **changes):
     return ep
 
 
-class FakeSonarr:
+class FakeSonarr(Arr):
+    """The real client over canned HTTP answers."""
+
     def __init__(self, episodes, queue=None):
+        super().__init__("http://sonarr", "key", "Sonarr")
         self.episodes = episodes
-        self.queue = queue or []
+        self.queue_records = queue or []
         self.get_calls = []
         self.send_calls = []
 
@@ -33,7 +38,7 @@ class FakeSonarr:
         if path == "/calendar":
             return self.episodes
         if path == "/queue":
-            return {"records": self.queue}
+            return {"records": self.queue_records}
         if path == "/history":
             return {"records": [{"eventType": "grabbed", "episodeId": 4},
                                 {"eventType": "downloadFailed", "episodeId": 5}]}
@@ -51,12 +56,12 @@ class FakeStack:
 
 class ParsingAndSchedule(unittest.TestCase):
     def test_parse_air(self):
-        self.assertAlmostEqual(watcher.parse_air("2026-10-04T13:30:00Z"), AIR_TS)
-        self.assertAlmostEqual(watcher.parse_air("2026-10-04T13:30:00.1234567Z"),
+        self.assertAlmostEqual(parse_utc("2026-10-04T13:30:00Z"), AIR_TS)
+        self.assertAlmostEqual(parse_utc("2026-10-04T13:30:00.1234567Z"),
                                AIR_TS + 0.123456, places=5)
-        self.assertIsNone(watcher.parse_air(None))
-        self.assertIsNone(watcher.parse_air(""))
-        self.assertIsNone(watcher.parse_air("not-a-date"))
+        self.assertIsNone(parse_utc(None))
+        self.assertIsNone(parse_utc(""))
+        self.assertIsNone(parse_utc("not-a-date"))
 
     def test_schedule_and_gap(self):
         self.assertEqual(watcher.next_search(None, AIR_TS, AIR_TS + 4 * 60), AIR_TS + 5 * 60)

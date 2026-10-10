@@ -1,0 +1,27 @@
+{% import "macros/ui.html" as ui %}
+{% if items %}
+<div class="card-grid">
+  {% for r in items %}
+  <article class="panel flex gap-3 p-3">
+    {{ ui.thumb(r.poster, r.kind, "w-20") }}
+    <div class="flex min-w-0 flex-1 flex-col">
+      <h3 class="font-semibold leading-snug">{{ r.title }}</h3>
+      <p class="text-xs text-muted">{{ r.year or "" }}</p>
+      <p class="mt-1 line-clamp-3 text-sm text-muted">{{ r.overview }}</p>
+      <div class="mt-auto flex flex-wrap gap-2 pt-3">
+        <button type="button" class="btn {{ '' if r.inLibrary else 'btn-primary' }}" hx-post="/add"
+                hx-vals='{{ {"kind": r.kind, "ext_id": r.extId}|tojson }}' hx-swap="outerHTML" hx-disabled-elt="this">
+          {% if r.inLibrary %}{{ ui.icon("refresh") }}In library · search again{% else %}{{ ui.icon("plus") }}Add &amp; download{% endif %}
+        </button>
+        {% if not r.inLibrary %}
+        {{ ui.watchlist_button({"kind": r.kind, "ext_id": r.extId, "title": r.title, "year": r.year or "",
+                                "poster": r.poster or "", "overview": r.overview}, saved=r.onWatchlist) }}
+        {% endif %}
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% elif query %}
+<div class="panel">{{ ui.empty("No results") }}</div>
+{% endif %}

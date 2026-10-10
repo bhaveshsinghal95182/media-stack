@@ -1,0 +1,21 @@
+{% extends "dialogs/_frame.html" %}
+{# A background job; it polls itself every second until the job finishes. #}
+{% block attrs %}{% if not job.finished %}hx-get="/jobs/{{ job.id }}" hx-trigger="load delay:1s" hx-swap="outerHTML"{% endif %}{% endblock %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block body %}
+{% if job.finished %}
+  {% set ok = job.outcome.ok %}
+  <p class="flex items-start gap-2 text-sm font-medium {{ 'text-ok' if ok else 'text-danger' }}">
+    {{ ui.icon("check" if ok else "x", "size-4 mt-0.5") }}{{ job.outcome.message }}
+  </p>
+{% elif job.progress %}
+  <p class="text-sm text-muted"><span class="spinner"></span>Copying… {{ job.progress_text }}</p>
+  <progress class="progress mt-3" max="{{ job.progress[1] }}" value="{{ job.progress[0] }}"></progress>
+{% else %}
+  <p class="text-sm text-muted"><span class="spinner"></span>{{ "Waiting for another job to finish…" if job.status == "queued" else "Working…" }}</p>
+{% endif %}
+{% if job.log %}<div class="log mt-3" data-tail>{{ job.log|join("\n") }}</div>{% endif %}
+{% endblock %}
+{% block footer %}
+{% if job.finished %}<footer class="dialog-actions"><button type="button" class="btn btn-primary" data-close-dialog>Close</button></footer>{% endif %}
+{% endblock %}

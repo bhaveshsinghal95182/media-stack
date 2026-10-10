@@ -1,0 +1,5 @@
+# The web page only; medialib and cli.py stay stdlib-only (cli.py runs on the host's Python).
+fastapi==0.143.0
+uvicorn==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.32

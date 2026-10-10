@@ -1,0 +1,26 @@
+{% import "macros/ui.html" as ui %}
+{# The import preview; it also enables or disables the dialog's Import button. #}
+{% if plan %}
+<p class="text-sm">Copy into <span class="break-all text-muted">{{ plan.folder }}</span> ({{ plan.totalHuman }}):</p>
+<ul class="mt-2 space-y-1 text-sm">
+  {% for f in plan.files %}
+  <li class="flex gap-2">{{ ui.icon("captions" if f.sub else "file-video", "size-4 mt-0.5 text-muted") }}
+    <span class="min-w-0 break-all">{% if f.tag %}<b class="font-semibold">{{ f.tag }}</b> {% endif %}{{ f.name }}
+      <span class="text-muted">{{ f.sizeHuman }}</span></span></li>
+  {% endfor %}
+</ul>
+{% if plan.skipped %}
+<p class="mt-3 text-sm font-medium text-warn">Skipped:</p>
+<ul class="mt-1 space-y-1 text-sm text-warn">
+  {% for s in plan.skipped %}<li class="break-all">{{ s.name }}: {{ s.why }}</li>{% endfor %}
+</ul>
+{% endif %}
+{% for w in plan.warnings %}<p class="mt-3 text-sm text-warn">{{ w }}</p>{% endfor %}
+{% elif error %}
+<p class="text-sm text-danger">{{ error }}</p>
+{% endif %}
+{% if offer_replace %}
+<label class="check mt-3"><input type="checkbox" name="replace" {{ "checked" if replace }}> Replace files already in the library</label>
+{% endif %}
+<button type="submit" id="import-submit" form="import-form" class="btn btn-primary" hx-swap-oob="true" {{ "disabled" if not plan }}>
+  {{ ui.icon("download") }}Import</button>

@@ -12,14 +12,15 @@ needs /data mounted locally (the container, LIBRARY_LOCAL_DATA=1).
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import threading
 import time
-from datetime import datetime, timezone
 
-import core
+from medialib import titles
+from medialib.background import run_forever
+from medialib.errors import LibraryError
+from medialib.fmt import episode_code, human, parse_utc
+from medialib.state import load_json, save_json
 
 GB = 1024 ** 3
 GRACE_DAYS = float(os.environ.get("JANITOR_GRACE_DAYS", "3"))
@@ -36,18 +37,6 @@ STOPPED = {"stoppedDL", "pausedDL", "stoppedUP", "pausedUP", "error", "missingFi
 # Pure helpers (tested)
 # --------------------------------------------------------------------------
 
-def parse_jf_date(value: str | None) -> float | None:
-    """Jellyfin dates carry 7 fractional digits; Python wants at most 6."""
-    if not value:
-        return None
-    value = re.sub(r"(\.\d{6})\d+", r"\1", value.replace("Z", "+00:00"))
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
-
-
 def merge_watched(per_user: list[tuple[str, list[dict]]], favourites: set[str],
                   seen: dict, now: float) -> dict[str, dict]:
     """Played items of all users, keyed by file path.
@@ -62,7 +51,7 @@ def merge_watched(per_user: list[tuple[str, list[dict]]], favourites: set[str],
             if not path.startswith(MEDIA_ROOT) or it.get("Type") not in ("Episode", "Movie"):
                 continue
             ud = it.get("UserData") or {}
-            played = parse_jf_date(ud.get("LastPlayedDate"))
+            played = parse_utc(ud.get("LastPlayedDate"))
             e = out.setdefault(path, {
                 "path": path, "kind": "movie" if it["Type"] == "Movie" else "episode",
                 "itemId": it.get("Id"), "title": it.get("Name") or "",
@@ -106,8 +95,12 @@ def releasable(nlinks: list[int]) -> bool:
 def label(e: dict) -> str:
     if e["kind"] == "movie":
         return e["title"]
-    code = f"S{e['season'] or 0:02d}E{e['episode'] or 0:02d}"
-    return f"{e['series']} {code}"
+    return f"{e['series']} {episode_code(e['season'], e['episode'])}"
+
+
+def keep(stack, item_id: str, user_id: str) -> None:
+    """Mark an item a Jellyfin favourite, which the janitor never removes."""
+    stack.jellyfin.send("POST", f"/UserFavoriteItems/{item_id}", userId=user_id)
 
 
 # --------------------------------------------------------------------------
@@ -123,14 +116,9 @@ class Janitor:
         self.tick_lock = threading.Lock()
         self.log_size = log_size
         self.state = {"seen": {}, "pending": [], "paused": []}
-        if state_path:
-            try:
-                with open(state_path, encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    self.state.update({k: loaded[k] for k in self.state if k in loaded})
-            except (OSError, ValueError):
-                pass
+        loaded = load_json(state_path, {})
+        if isinstance(loaded, dict):
+            self.state.update({k: loaded[k] for k in self.state if k in loaded})
         self.log: list[dict] = []
         self.scheduled: list[dict] = []
         self.kept = 0
@@ -150,11 +138,7 @@ class Janitor:
         if not self.state_path:
             return
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
-            tmp = self.state_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.state, f)
-            os.replace(tmp, self.state_path)
+            save_json(self.state_path, self.state)
         except OSError as e:
             self._log(f"Error saving state: {e}")
 
@@ -163,24 +147,33 @@ class Janitor:
         return st.f_bavail * st.f_frsize, st.f_blocks * st.f_frsize
 
     def start(self) -> None:
-        def loop() -> None:
-            while True:
-                try:
-                    self.tick()
-                    self.last_error = None
-                except Exception as e:  # keep running; show it on the page
-                    self.last_error = str(e)
-                    self._log(f"Error: {e}")
-                time.sleep(TICK)
-        threading.Thread(target=loop, daemon=True).start()
+        run_forever(self.tick, TICK, self._failed)
+
+    def _failed(self, e: Exception) -> None:
+        self.last_error = str(e)
+        self._log(f"Error: {e}")
 
     def tick(self, now: float | None = None) -> None:
         if not self.tick_lock.acquire(blocking=False):
             return  # a check is already running ("Check now" during a scheduled one)
         try:
             self._tick(now or time.time())
+            self.last_error = None
         finally:
             self.tick_lock.release()
+
+    def check_now(self, force: bool = False) -> None:
+        """Start a full check on a thread; `force` also skips the grace period."""
+        def run() -> None:
+            try:
+                if force:
+                    self.force_clean()
+                else:
+                    self.last_clean = 0.0  # due now
+                    self.tick()
+            except Exception as e:  # noqa: BLE001 - reported like a scheduled run
+                self._failed(e)
+        threading.Thread(target=run, daemon=True).start()
 
     def force_clean(self) -> bool:
         """Remove everything watched now, skipping the grace period (favourites stay).
@@ -216,16 +209,16 @@ class Janitor:
             todo = [t["hash"] for t in stack.qb.torrents()
                     if t["progress"] < 1 and t["state"] not in STOPPED]
             if todo:
-                stack.qb.call("torrents/stop", {"hashes": "|".join(todo)})
+                stack.qb.stop(todo)
                 self.state["paused"] = sorted(set(self.state["paused"]) | set(todo))
-                self._log(f"Only {core.human(free)} free: paused {len(todo)} download(s)")
+                self._log(f"Only {human(free)} free: paused {len(todo)} download(s)")
         elif action == "resume":
             have = {t["hash"] for t in stack.qb.torrents()}
             back = [h for h in self.state["paused"] if h in have]
             if back:
-                stack.qb.call("torrents/start", {"hashes": "|".join(back)})
+                stack.qb.start(back)
             self.state["paused"] = []
-            self._log(f"{core.human(free)} free again: resumed {len(back)} download(s)")
+            self._log(f"{human(free)} free again: resumed {len(back)} download(s)")
 
     # -- watched cleanup --
 
@@ -233,7 +226,7 @@ class Janitor:
         jf = stack.jellyfin
         users = jf.get("/Users")
         if not users:
-            raise core.LibraryError("Jellyfin returned no users")
+            raise LibraryError("Jellyfin returned no users")
         per_user, favourites = [], set()
         for u in users:
             items = jf.get("/Items", userId=u["Id"], Recursive="true", Filters="IsPlayed",
@@ -277,15 +270,15 @@ class Janitor:
                     m = movies.get(e["path"])
                     if not m:
                         continue  # not Radarr's (e.g. imported by hand elsewhere)
-                    res = core.delete_execute(stack, core.delete_plan(stack, "movie", m["id"]),
-                                              log=lambda _m: None)
+                    res = titles.delete_execute(
+                        stack, titles.delete_plan(stack, "movie", m["id"]), log=lambda _m: None)
                     self._log(f"Removed {label(e)} (watched), freed {res['freedHuman']}"
                               + ("" if res["ok"] else f"; problems: {', '.join(res['problems'])}"))
                 else:
                     if episodes is None:
                         episodes = stack.sonarr.get("/series")
                     self._remove_episode(stack, e, episodes)
-            except core.LibraryError as err:
+            except LibraryError as err:
                 self._log(f"Couldn't remove {label(e)}: {err}")
 
     def _remove_episode(self, stack, e: dict, all_series: list[dict]) -> None:
@@ -310,10 +303,6 @@ class Janitor:
         self.state["pending"] = sorted(set(self.state["pending"]) | set(holders))
         self._log(f"Removed {label(e)} (watched by {', '.join(e['users'])})")
 
-    def _torrent_files(self, stack, t: dict) -> list[str]:
-        files = json.loads(stack.qb.call("torrents/files", {"hash": t["hash"]}))
-        return [os.path.join(t["save_path"], f["name"]) for f in files]
-
     def _inode_map(self, stack) -> dict[int, list[str]]:
         """inode -> hashes of finished torrents holding it; built once per pass."""
         if self._inodes is None:
@@ -321,7 +310,7 @@ class Janitor:
             for t in stack.qb.torrents():
                 if t["progress"] < 1:
                     continue
-                for p in self._torrent_files(stack, t):
+                for p in stack.qb.file_paths(t):
                     try:
                         self._inodes.setdefault(os.stat(p).st_ino, []).append(t["hash"])
                     except OSError:
@@ -336,14 +325,14 @@ class Janitor:
             if not t:
                 continue
             links = []
-            for p in self._torrent_files(stack, t):
+            for p in stack.qb.file_paths(t):
                 try:
                     links.append(os.stat(p).st_nlink)
                 except OSError:
                     pass
             if releasable(links):
                 stack.qb.delete([h])
-                self._log(f"Deleted torrent {t['name']}, freed {core.human(t['size'])}")
+                self._log(f"Deleted torrent {t['name']}, freed {human(t['size'])}")
             else:
                 keep.append(h)  # e.g. a season pack with episodes not watched yet
         self.state["pending"] = keep

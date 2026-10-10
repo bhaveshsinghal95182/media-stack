@@ -6,6 +6,11 @@ import json
 import os
 import threading
 import time
+from collections.abc import Callable
+
+from medialib import titles
+from medialib.errors import LibraryError
+from medialib.state import save_json
 
 
 KINDS = ("movie", "show")
@@ -160,9 +165,39 @@ class Watchlist:
             return
         if not self._writable:
             raise OSError("cannot save watchlist because its original file was not preserved")
-        parent = os.path.dirname(os.path.abspath(self.path))
-        os.makedirs(parent, exist_ok=True)
-        temporary_path = self.path + ".tmp"
-        with open(temporary_path, "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "items": items}, f, indent=1, ensure_ascii=False)
-        os.replace(temporary_path, self.path)
+        save_json(self.path, {"version": 1, "items": items}, indent=1)
+
+
+# --------------------------------------------------------------------------
+# The watchlist against the library
+# --------------------------------------------------------------------------
+
+def watchlist_view(stack, wl: Watchlist) -> list[dict]:
+    """Watchlist items, each marked with whether Radarr/Sonarr already have it."""
+    items = wl.items()
+    have: dict[str, set[int]] = {}
+    for kind in {it["kind"] for it in items}:
+        k = stack.kind(kind)
+        have[kind] = {i.get(k.id_key) for i in k.items()}
+    for it in items:
+        it["inLibrary"] = it["extId"] in have.get(it["kind"], set())
+    return items
+
+
+def watchlist_send(stack, wl: Watchlist, keys: list[tuple[str, int]],
+                   log: Callable[[str], None] = print) -> dict:
+    """Add titles to Radarr/Sonarr and search now; each one sent leaves the list."""
+    sent, failed = [], []
+    for kind, ext_id in keys:
+        try:
+            res = titles.add_title(stack, kind, ext_id)
+        except LibraryError as e:
+            failed.append({"kind": kind, "extId": ext_id, "error": str(e)})
+            log(f"Failed {kind} {ext_id}: {e}")
+            continue
+        wl.remove(kind, ext_id)
+        sent.append(res["label"])
+        log(res["message"])
+    return {"ok": not failed, "sent": sent, "failed": failed,
+            "message": f"Sent {len(sent)} to Radarr/Sonarr"
+                       + (f", {len(failed)} failed" if failed else "") + "."}
