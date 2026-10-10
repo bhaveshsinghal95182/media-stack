@@ -141,6 +141,10 @@ label.chk { display: flex; gap: 8px; align-items: center; margin-top: 10px; font
   #wlList .row .grow { flex-basis: calc(100% - 100px); }
   #wlList .row .title { white-space: normal; }
   #wlList .row .btns { width: 100%; }
+  #movies .row, #shows .row { flex-wrap: wrap; row-gap: 8px; }
+  #movies .row .grow, #shows .row .grow { flex-basis: calc(100% - 52px); }
+  #movies .row .btns, #shows .row .btns { width: 100%; flex-wrap: nowrap; }
+  #movies .row .btns .btn, #shows .row .btns .btn { flex: 1; padding: 6px 8px; }
 }
 </style>
 </head>
@@ -333,8 +337,11 @@ function renderLibrary() {
           <div class="title">${esc(r.title)} <span class="sub">${esc(r.year || "")}</span></div>
           <div class="sub">${statusPill(r)}${r.episodes ? `<span class="pill">episodes ${esc(r.episodes)}</span>` : ""}${r.sizeHuman ? esc(r.sizeHuman) : ""}${r.monitored === false ? ` <span class="pill hide-sm">unmonitored</span>` : ""}</div>
         </div>
-        <button class="btn" data-releases="${kind}:${r.id}">Releases</button>
-        <button class="btn danger" data-del="${kind}:${r.id}">Delete</button>
+        <div class="btns">
+          ${kind === "show" ? `<button class="btn${r.hiddenFromTv ? " primary" : ""}" data-tvhide="${r.id}:${r.hiddenFromTv ? 0 : 1}" title="Block the TV account from seeing this series">${r.hiddenFromTv ? "Hidden on TV" : "Hide on TV"}</button>` : ""}
+          <button class="btn" data-releases="${kind}:${r.id}">Releases</button>
+          <button class="btn danger" data-del="${kind}:${r.id}">Delete</button>
+        </div>
       </div>`).join("") : `<div class="empty">${f ? "No matches" : "Nothing here yet"}</div>`;
   }
 }
@@ -367,6 +374,15 @@ document.addEventListener("click", async e => {
         after: loadLibrary});
     } catch (err) { toast(err.message); $("#delGo").disabled = false; }
   };
+});
+
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-tvhide]"); if (!b) return;
+  const [id, hide] = b.dataset.tvhide.split(":");
+  b.disabled = true;
+  try { toast((await api("/api/tv-hide", {id: Number(id), hidden: hide === "1"})).message); }
+  catch (err) { toast(err.message); }
+  loadLibrary();
 });
 
 // ---- releases ----

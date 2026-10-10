@@ -158,9 +158,9 @@ class Jellyfin:
         q = ("?" + urllib.parse.urlencode(params)) if params else ""
         return http_json(self.base + path + q, headers=self.headers)
 
-    def send(self, method: str, path: str, **params):
+    def send(self, method: str, path: str, body=None, **params):
         q = ("?" + urllib.parse.urlencode(params)) if params else ""
-        return http_json(self.base + path + q, method, headers=self.headers)
+        return http_json(self.base + path + q, method, body, headers=self.headers)
 
 
 class QBit:
@@ -422,7 +422,9 @@ def overview(stack: Stack) -> dict:
         queue = k.arr.queue()
         claimed |= {r["downloadId"].lower() for r in queue if r.get("downloadId")}
         rows = []
-        for item in sorted(k.items(), key=lambda i: i["title"].lower()):
+        items = sorted(k.items(), key=lambda i: i["title"].lower())
+        hidden = tv_hidden_ids(stack, items) if kind == "show" else set()
+        for item in items:
             hs = k.hashes(item, queue)
             claimed |= hs
             live = [torrents[h] for h in hs if h in torrents]
@@ -443,6 +445,7 @@ def overview(stack: Stack) -> dict:
             if kind == "show":
                 st = item.get("statistics") or {}
                 row["episodes"] = f"{st.get('episodeFileCount', 0)}/{st.get('episodeCount', 0)}"
+                row["hiddenFromTv"] = item["id"] in hidden
             rows.append(row)
         out["movies" if kind == "movie" else "shows"] = rows
     claimed = claimed_hashes(stack, torrents)
@@ -450,6 +453,75 @@ def overview(stack: Stack) -> dict:
     out["orphans"] = {"count": len(orphans), "size": sum(t["size"] for t in orphans),
                       "sizeHuman": human(sum(t["size"] for t in orphans))}
     return out
+
+
+# --------------------------------------------------------------------------
+# Hide series from the TV Jellyfin user
+# --------------------------------------------------------------------------
+
+TV_HIDE_TAG = "hidden-from-tv"
+
+
+def _jf_series(jf: Jellyfin) -> list[dict]:
+    return jf.get("/Items", Recursive="true", IncludeItemTypes="Series",
+                  Fields="ProviderIds,Tags,Path,LockedFields").get("Items", [])
+
+
+def _jf_match(series: list[dict], item: dict) -> dict | None:
+    """The Jellyfin series for an Arr show: by TVDB id, else by folder name."""
+    tvdb = str(item.get("tvdbId") or "")
+    for s in series:
+        if tvdb and (s.get("ProviderIds") or {}).get("Tvdb") == tvdb:
+            return s
+    folder = os.path.basename((item.get("path") or "").rstrip("/"))
+    return next((s for s in series
+                 if folder and os.path.basename(s.get("Path") or "") == folder), None)
+
+
+def tv_user(stack: Stack) -> dict:
+    name = os.environ.get("TV_USER", "tv").lower()
+    user = next((u for u in stack.jellyfin.get("/Users") if u["Name"].lower() == name), None)
+    if not user:
+        raise LibraryError(f"no Jellyfin user named '{name}' (set TV_USER)")
+    return user
+
+
+def tv_hidden_ids(stack: Stack, shows: list[dict]) -> set[int]:
+    """Arr ids of the shows currently hidden from the TV user (empty if Jellyfin is down)."""
+    try:
+        series = _jf_series(stack.jellyfin)
+    except LibraryError:
+        return set()
+    return {i["id"] for i in shows
+            if (m := _jf_match(series, i)) and TV_HIDE_TAG in (m.get("Tags") or [])}
+
+
+def set_tv_hidden(stack: Stack, show_id: int, hidden: bool) -> dict:
+    """Tag the series in Jellyfin and make sure the TV user blocks that tag."""
+    jf = stack.jellyfin
+    item = stack.kind("show").arr.get(f"/series/{show_id}")
+    match = _jf_match(_jf_series(jf), item)
+    if not match:
+        raise LibraryError(f"{item['title']} isn't in Jellyfin yet; wait for its library scan")
+    user = tv_user(stack)
+    policy = user["Policy"]
+    old = policy.get("BlockedTags") or []
+    blocked = [t for t in old if t != TV_HIDE_TAG] + ([TV_HIDE_TAG] if hidden else [])
+    if blocked != old:
+        jf.send("POST", f"/Users/{user['Id']}/Policy", body={**policy, "BlockedTags": blocked})
+    full = jf.get("/Items", Ids=match["Id"],
+                  Fields="Tags,LockedFields,ProviderIds,Genres,Studios,People,Taglines,"
+                         "Overview,OriginalTitle").get("Items", [None])[0]
+    if not full:
+        raise LibraryError(f"{item['title']} vanished from Jellyfin; try again")
+    locked = list(full.get("LockedFields") or [])
+    if hidden and "Tags" not in locked:
+        locked.append("Tags")   # a metadata refresh must not drop the tag
+    full.update({"Tags": [t for t in full.get("Tags") or [] if t != TV_HIDE_TAG]
+                 + ([TV_HIDE_TAG] if hidden else []), "LockedFields": locked})
+    jf.send("POST", f"/Items/{match['Id']}", body=full)
+    return {"hidden": hidden, "message": f"{item['title']} is now "
+            f"{'hidden from' if hidden else 'visible to'} {user['Name']}."}
 
 
 # --------------------------------------------------------------------------

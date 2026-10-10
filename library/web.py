@@ -300,6 +300,9 @@ class Handler(BaseHTTPRequestHandler):
                 stack().jellyfin.send("POST", f"/UserFavoriteItems/{body['itemId']}",
                                       userId=str(body["userId"]))
                 return self._json(200, {"message": "Kept: marked as a favourite in Jellyfin."})
+            if route == "/api/tv-hide":
+                return self._json(200, core.set_tv_hidden(stack(), int(body["id"]),
+                                                          bool(body["hidden"])))
             if route == "/api/janitor/run":
                 if not JANITOR:
                     raise LibraryError("automatic cleanup is off")
