@@ -3,7 +3,7 @@
 {% set airing_status = {"FINISHED": "Finished airing", "NOT_YET_RELEASED": "Not yet airing",
                         "CANCELLED": "Cancelled", "HIATUS": "On hiatus"} %}
 {# Re-requests this whole partial: the season, format and sort travel in the form. #}
-<form id="seasonal-form" class="toolbar" hx-get="/seasonal/grid" hx-target="#seasonal" hx-trigger="change[target.name]"
+<form id="seasonal-form" class="toolbar" hx-get="/seasonal/grid" hx-target="#seasonal" hx-trigger="change[target.name!='']"
       hx-indicator="#seasonal-loading" hx-sync="this:replace">
   <input type="hidden" name="season" value="{{ season }}">
   <input type="hidden" name="year" value="{{ year }}">

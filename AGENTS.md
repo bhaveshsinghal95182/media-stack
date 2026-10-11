@@ -189,6 +189,10 @@ Keep both paths working.
   200, so it swaps in; a full page gets `pages/error.html`. Anything swapped
   into `#dialog-body` opens the dialog. Tailwind only sees literal class names
   in templates, so never build classes like `bg-{{ tone }}`.
+  An `hx-trigger` filter must evaluate to exactly `true`: htmx 2 drops the
+  event on any other value, even a truthy one. Write `change[target.name!='']`,
+  not `change[target.name]`. The second form broke the Seasonal tab's
+  format and sort controls.
 - **Jobs:** long POSTs (add, delete, import, follow, send, orphan delete) run as
   background jobs (`medialib.jobs.JobRunner`). `partials/job.html` polls
   `/jobs/<id>` every second and fires the job's refresh event when done.
