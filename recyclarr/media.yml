@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://schemas.recyclarr.dev/v8/config-schema.json
+# Recyclarr syncs TRaSH Guides quality profiles, custom formats and file-size
+# definitions into Radarr and Sonarr: daily, or now with
+# `docker compose exec recyclarr recyclarr sync`.
+# Mounted read-only at /config/configs; Recyclarr's cache lives in ./config/recyclarr.
+#
+# Departures from the TRaSH templates, all because the disk is small:
+#   - no upgrades: the first good release stays, nothing is re-downloaded later
+#   - x265 at 1080p is allowed (TRaSH's "Golden Rule HD" group is skipped)
+#   - anime: no Remux; any group may be grabbed (min score 0, not 100), so obscure
+#     seasonal shows still find something; dubs-only releases aren't refused
+
+radarr:
+  movies:
+    base_url: http://radarr:7878
+    api_key: !env_var RADARR_API_KEY
+    delete_old_custom_formats: true
+
+    quality_definition:
+      type: movie
+
+    quality_profiles:
+      - trash_id: d1d67249d3890e49bc12e275d989a7e9  # HD Bluray + WEB
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: false
+
+    custom_format_groups:
+      skip:
+        - f8bf8eab4617f12dfdbd16303d8da245  # [Optional] Golden Rule HD (blocks x265 at 1080p)
+
+sonarr:
+  anime:
+    base_url: http://sonarr:8989
+    api_key: !env_var SONARR_API_KEY
+    delete_old_custom_formats: true
+
+    quality_definition:
+      type: anime
+
+    quality_profiles:
+      - trash_id: 20e0fc959f1f1704bed501f23bdae76f  # [Anime] Remux-1080p
+        name: Anime 1080p
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: false
+        min_format_score: 0
+        qualities:
+          - name: Bluray-1080p
+          - name: WEB 1080p
+            qualities: [HDTV-1080p, WEBRip-1080p, WEBDL-1080p]
+          - name: Bluray-720p
+          - name: WEB 720p
+            qualities: [HDTV-720p, WEBRip-720p, WEBDL-720p]
+          - name: Bluray-480p
+          - name: WEB 480p
+            qualities: [WEBRip-480p, WEBDL-480p]
+          - name: DVD
+          - name: SDTV
+
+    custom_formats:
+      - trash_ids:
+          - 9c14d194486c4014d422adc64092d794  # Dubs Only
+        assign_scores_to:
+          - trash_id: 20e0fc959f1f1704bed501f23bdae76f
+            score: 0
