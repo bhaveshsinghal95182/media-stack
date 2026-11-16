@@ -3,35 +3,33 @@
 <section data-filter-group>
   <h2 class="section-title">{{ heading }} <span class="font-normal normal-case tracking-normal">{{ rows|length }}</span></h2>
   {% if rows %}
-  <div class="poster-grid">
+  <div class="panel">
     {% for row in rows %}
-    <article class="panel group flex flex-col overflow-hidden" data-item data-text="{{ row.title|lower }}">
-      <div class="relative aspect-[2/3] bg-surface-2">
-        {{ ui.poster(row.poster, kind) }}
-        <div class="absolute inset-x-2 top-2 flex flex-wrap gap-1">
-          {{ ui.status_pill(row.status) }}
-          {% if row.monitored == false %}<span class="pill pill-overlay">unmonitored</span>{% endif %}
-        </div>
-      </div>
-      <div class="flex flex-1 flex-col gap-0.5 p-3">
-        <h3 class="line-clamp-2 text-sm font-semibold leading-snug" title="{{ row.title }}">{{ row.title }}</h3>
-        <p class="text-xs text-muted">
-          {{ row.year or "" }}{% if row.episodes %} · {{ row.episodes }} eps{% endif %}{% if row.sizeHuman %} · {{ row.sizeHuman }}{% endif %}
-        </p>
-        <div class="mt-auto flex items-center gap-1 pt-2">
-          <button type="button" class="btn btn-icon" title="Releases" aria-label="Releases for {{ row.title }}"
-                  hx-get="/releases/{{ kind }}/{{ row.id }}" hx-target="#dialog-body">{{ ui.icon("layers") }}</button>
-          {% if kind == "show" %}
-          {% with show_id=row.id, hidden=row.hiddenFromTv %}{% include "partials/tv_button.html" %}{% endwith %}
-          {% endif %}
-          <button type="button" class="btn btn-icon btn-danger ml-auto" title="Delete" aria-label="Delete {{ row.title }}"
-                  hx-get="/library/{{ kind }}/{{ row.id }}/delete" hx-target="#dialog-body">{{ ui.icon("trash") }}</button>
-        </div>
-      </div>
-    </article>
+    <div class="row" data-item data-text="{{ row.title|lower }}">
+      <button type="button" class="row-open" hx-get="/library/{{ kind }}/{{ row.id }}" hx-target="#dialog-body">
+        {{ ui.thumb(row.poster, kind) }}
+        <span class="min-w-0 flex-1">
+          <span class="block truncate font-medium">{{ row.title }} <span class="text-sm font-normal text-muted">{{ row.year or "" }}</span></span>
+          <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+            {{ ui.status_pill(row.status) }}
+            {% if row.episodes %}<span>{{ row.episodes }} eps</span>{% endif %}
+            {% if row.sizeHuman %}<span>{{ row.sizeHuman }}</span>{% endif %}
+            {% if row.monitored == false %}<span class="pill">unmonitored</span>{% endif %}
+          </span>
+        </span>
+      </button>
+      {# Releases is in the details dialog too; phones keep the row to two buttons. #}
+      <button type="button" class="btn btn-icon max-sm:hidden" title="Releases" aria-label="Releases for {{ row.title }}"
+              hx-get="/releases/{{ kind }}/{{ row.id }}" hx-target="#dialog-body">{{ ui.icon("layers") }}</button>
+      {% if kind == "show" %}
+      {% with show_id=row.id, hidden=row.hiddenFromTv %}{% include "partials/tv_button.html" %}{% endwith %}
+      {% endif %}
+      <button type="button" class="btn btn-icon btn-danger" title="Delete" aria-label="Delete {{ row.title }}"
+              hx-get="/library/{{ kind }}/{{ row.id }}/delete" hx-target="#dialog-body">{{ ui.icon("trash") }}</button>
+    </div>
     {% endfor %}
+    <div data-filter-empty hidden>{{ ui.empty("No matches") }}</div>
   </div>
-  <div class="panel" data-filter-empty hidden>{{ ui.empty("No matches") }}</div>
   {% else %}
   <div class="panel">{{ ui.empty("Nothing here yet") }}</div>
   {% endif %}

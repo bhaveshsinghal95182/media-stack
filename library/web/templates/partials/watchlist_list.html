@@ -1,30 +1,67 @@
 {% import "macros/ui.html" as ui %}
-{% if items %}
-<div class="panel" data-filter-group>
-  {% for it in items %}
-  {% set key = it.kind ~ ":" ~ it.extId %}
-  <div class="row" data-item data-kind="{{ it.kind }}" data-text="{{ it.title|lower }}">
-    <input type="checkbox" name="key" value="{{ key }}" class="size-4 shrink-0 accent-accent" aria-label="Select {{ it.title }}">
-    {{ ui.thumb(it.poster, it.kind) }}
-    <div class="min-w-0 flex-1">
-      <p class="truncate font-medium">{{ it.title }} <span class="text-sm font-normal text-muted">{{ it.year or "" }}</span></p>
-      <p class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-        <span class="pill">{{ it.kind }}</span>
-        {% if it.inLibrary %}<span class="pill pill-ok">already in library</span>{% endif %}
-        <span>saved {{ it.added|rel_time }}</span>
-      </p>
-      {% if it.overview %}<p class="mt-0.5 truncate text-xs text-muted max-sm:hidden">{{ it.overview }}</p>{% endif %}
-    </div>
-    <button type="button" class="btn btn-icon btn-primary" title="Download" aria-label="Download {{ it.title }}"
-            hx-post="/watchlist/send" hx-vals='{{ {"key": key}|tojson }}' hx-target="#dialog-body"
-            {% if it.kind == "show" %}hx-confirm="Download every episode of {{ it.title }}?"{% endif %}>{{ ui.icon("download") }}</button>
-    <button type="button" class="btn btn-icon btn-danger" title="Remove" aria-label="Remove {{ it.title }}"
-            hx-post="/watchlist/remove" hx-vals='{{ {"kind": it.kind, "ext_id": it.extId}|tojson }}' hx-swap="none"
-            hx-disabled-elt="this">{{ ui.icon("x") }}</button>
+{% if sections %}
+{% for section in sections %}
+{% set gid = section.key or "unfiled" %}
+<section data-filter-group data-filter-section>
+  <div class="group-head">
+    <button type="button" class="group-toggle" data-collapse="{{ gid }}" aria-expanded="true"
+            aria-controls="group-{{ gid }}">
+      {{ ui.icon("chevron-down", "size-3.5") }}
+      {{ ui.icon(section.icon, "size-3.5") }}
+      <span class="truncate">{{ section.name }}</span>
+      <span class="font-normal normal-case tracking-normal">{{ section.titles|length }}</span>
+    </button>
+    {% if section.key %}
+    <span class="ml-auto -mr-1 flex items-center">
+      <button type="button" class="btn btn-ghost btn-icon size-7" title="Rename {{ section.name }}"
+              aria-label="Rename {{ section.name }}" hx-get="/watchlist/playlists/{{ section.key }}/rename"
+              hx-target="#dialog-body">{{ ui.icon("pencil", "size-3.5") }}</button>
+      <button type="button" class="btn btn-ghost btn-icon size-7 text-danger" title="Delete {{ section.name }}"
+              aria-label="Delete {{ section.name }}" hx-post="/watchlist/playlists/{{ section.key }}/delete"
+              hx-swap="none" hx-disabled-elt="this"
+              hx-confirm="Delete the playlist “{{ section.name }}”? Its {{ section.titles|length }} title{{ 's' if section.titles|length != 1 }} stay on your watchlist.">{{ ui.icon("trash", "size-3.5") }}</button>
+    </span>
+    {% endif %}
   </div>
-  {% endfor %}
-  <div data-filter-empty hidden>{{ ui.empty("Nothing matches.") }}</div>
-</div>
+  <div class="panel" id="group-{{ gid }}" data-collapse-body="{{ gid }}">
+    {% for it in section.titles %}
+    {% set key = it.kind ~ ":" ~ it.extId %}
+    {% set edit = {"kind": it.kind, "ext_id": it.extId, "title": it.title,
+                   "year": it.year or "", "poster": it.poster or "", "overview": it.overview or ""} %}
+    <div class="row" data-item data-kind="{{ it.kind }}" data-text="{{ it.title|lower }}">
+      <input type="checkbox" name="key" value="{{ key }}" class="size-4 shrink-0 accent-accent" aria-label="Select {{ it.title }}">
+      <button type="button" class="row-open" hx-get="/watchlist/{{ it.kind }}/{{ it.extId }}" hx-target="#dialog-body">
+        {{ ui.thumb(it.poster, it.kind) }}
+        <span class="min-w-0 flex-1">
+          <span class="block truncate font-medium">{{ it.title }} <span class="text-sm font-normal text-muted">{{ it.year or "" }}</span></span>
+          <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+            <span class="pill">{{ it.kind }}</span>
+            {% if it.inLibrary %}<span class="pill pill-ok">already in library</span>{% endif %}
+            <span>saved {{ it.added|rel_time }}</span>
+          </span>
+          {% if it.overview %}<span class="mt-0.5 block truncate text-xs text-muted max-sm:hidden">{{ it.overview }}</span>{% endif %}
+        </span>
+      </button>
+      <button type="button" class="btn btn-icon" title="Playlists" aria-label="Playlists for {{ it.title }}"
+              hx-get="/watchlist/save" hx-vals='{{ edit|tojson }}' hx-target="#dialog-body">{{ ui.icon("folder") }}</button>
+      {% if it.kind == "show" %}
+      <button type="button" class="btn btn-icon btn-primary" title="Download…" aria-label="Download {{ it.title }}" hx-target="#dialog-body"
+              hx-get="/following/follow?{{ {'title': it.title, 'tvdb_id': it.extId, 'origin': 'watchlist'}|urlencode }}">{{ ui.icon("download") }}</button>
+      {% else %}
+      <button type="button" class="btn btn-icon btn-primary" title="Download" aria-label="Download {{ it.title }}"
+              hx-post="/watchlist/send" hx-vals='{{ {"key": key}|tojson }}' hx-target="#dialog-body">{{ ui.icon("download") }}</button>
+      {% endif %}
+      <button type="button" class="btn btn-icon btn-danger" title="Remove" aria-label="Remove {{ it.title }}"
+              hx-post="/watchlist/remove" hx-vals='{{ {"kind": it.kind, "ext_id": it.extId}|tojson }}' hx-swap="none"
+              hx-disabled-elt="this">{{ ui.icon("x") }}</button>
+    </div>
+    {% else %}
+    {{ ui.empty("Empty") }}
+    {% endfor %}
+    {% if section.titles %}<div data-filter-empty hidden>{{ ui.empty("Nothing matches.") }}</div>{% endif %}
+  </div>
+</section>
+{% endfor %}
 {% else %}
-<div class="panel">{{ ui.empty("Your watchlist is empty. Use “Save for later” on the Add or Seasonal pages.") }}</div>
+<div class="panel">{{ ui.empty("Your watchlist is empty. Save a title from Add or Seasonal.") }}</div>
 {% endif %}

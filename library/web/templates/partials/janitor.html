@@ -2,6 +2,11 @@
 <div class="flex flex-wrap items-center gap-2">
   <h2 class="section-title my-0 flex-1">Disk</h2>
   {% if janitor %}
+  {% if janitor.running %}
+  <span class="text-sm text-muted"><span class="spinner"></span>Checking…</span>
+  {# Reload until the check finishes, so removed items leave the list. #}
+  <div hx-get="/cleanup/janitor" hx-trigger="load delay:3s" hx-target="#janitor"></div>
+  {% endif %}
   <button type="button" class="btn" hx-post="/cleanup/janitor/run" hx-swap="none" hx-disabled-elt="this">{{ ui.icon("refresh") }}Check now</button>
   <button type="button" class="btn btn-danger" hx-post="/cleanup/janitor/force" hx-swap="none" hx-disabled-elt="this"
           hx-confirm="Delete everything watched now, without waiting for the grace period? Favourites are kept.">Force cleanup</button>
@@ -26,7 +31,7 @@
 </div>
 
 <h2 class="section-title">Watched · removed automatically</h2>
-<p class="note">Anything watched in Jellyfin (by any user) is removed {{ janitor.graceDays }} days after it was last played, and straight away when space runs low. Episodes go but the show stays followed; movies are deleted completely. Favourites in Jellyfin are never removed{% if janitor.kept %} ({{ janitor.kept }} kept){% endif %}; <b class="font-medium text-fg">Keep</b> marks one as a favourite.
+<p class="note">Anything watched in Jellyfin (by any user) is removed {{ '%g'|format(janitor.graceDays) }} days after it was last played ({{ '%g'|format(janitor.rollingGraceDays) }} day{{ 's' if janitor.rollingGraceDays != 1 }} for shows on a rolling window), and straight away when space runs low. Episodes go but the show stays followed; movies are deleted completely. Favourites in Jellyfin are never removed{% if janitor.kept %} ({{ janitor.kept }} kept){% endif %}; <b class="font-medium text-fg">Keep</b> marks one as a favourite.
   {% if janitor.waitingTorrents %}{{ janitor.waitingTorrents }} season pack(s) are waiting for their remaining episodes to be watched before their space is freed.{% endif %}
   {% if janitor.lastError %}<span class="text-danger">Last error: {{ janitor.lastError }}</span>{% endif %}</p>
 <div class="panel mt-3 overflow-hidden">

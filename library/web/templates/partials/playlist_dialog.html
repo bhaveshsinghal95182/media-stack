@@ -1,0 +1,20 @@
+{% extends "dialogs/_frame.html" %}
+{% block title %}{{ "Rename playlist" if playlist else "New playlist" }}{% endblock %}
+{% block body %}
+<form id="playlist-form" hx-post="{{ action }}" hx-target="#dialog-body"
+      hx-disabled-elt="#playlist-submit">
+  <label class="input-icon">
+    {{ ui.icon("folder") }}
+    <input type="text" name="name" class="input" value="{{ playlist.name if playlist else '' }}"
+           placeholder="Playlist name" aria-label="Playlist name" maxlength="60" required autofocus
+           autocomplete="off">
+  </label>
+</form>
+{% endblock %}
+{% block footer %}
+<footer class="dialog-actions">
+  <button type="button" class="btn btn-ghost btn-icon" data-close-dialog aria-label="Cancel" title="Cancel">{{ ui.icon("x") }}</button>
+  <button type="submit" id="playlist-submit" form="playlist-form" class="btn btn-primary btn-icon"
+          aria-label="Save" title="Save">{{ ui.icon("check") }}</button>
+</footer>
+{% endblock %}

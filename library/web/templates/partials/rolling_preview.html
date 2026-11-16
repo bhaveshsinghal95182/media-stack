@@ -1,0 +1,4 @@
+{# The episode a rolling window's start number points to. #}
+{% if error %}<span class="text-warn">{{ error }}</span>
+{% elif ep %}{{ ep.code }} · “{{ ep.title }}”{% if ep.airAt %} · {{ ep.airAt|short_date }}{% endif %} <span class="text-muted">(of {{ ep.last }})</span>
+{% else %}Type an episode number; One Piece-style shows count from 1 across all seasons.{% endif %}

@@ -1,0 +1,43 @@
+{% extends "dialogs/_frame.html" %}
+{# Where a title goes. Nothing ticked = just the watchlist. #}
+{% block title %}{{ item.title }}{% if item.year %} <span class="font-normal text-muted">{{ item.year }}</span>{% endif %}{% endblock %}
+{% block body %}
+<form id="save-form" class="space-y-1" hx-post="/watchlist/items" hx-target="#dialog-body"
+      hx-disabled-elt="#save-submit">
+  <input type="hidden" name="kind" value="{{ item.kind }}">
+  <input type="hidden" name="ext_id" value="{{ item.extId }}">
+  <input type="hidden" name="title" value="{{ item.title }}">
+  <input type="hidden" name="year" value="{{ item.year }}">
+  <input type="hidden" name="poster" value="{{ item.poster }}">
+  <input type="hidden" name="overview" value="{{ item.overview }}">
+
+  <div class="choice cursor-default" aria-hidden="true">
+    {{ ui.icon("bookmark") }}
+    <span class="min-w-0 flex-1 truncate font-medium">Watchlist</span>
+    <span class="choice-mark choice-mark-on">{{ ui.icon("check", "size-3") }}</span>
+  </div>
+
+  {% for p in playlists %}
+  <label class="choice">
+    <input type="checkbox" name="playlist" value="{{ p.key }}" class="sr-only" {{ "checked" if p.checked }}>
+    {{ ui.icon("folder") }}
+    <span class="min-w-0 flex-1 truncate">{{ p.name }}</span>
+    <span class="choice-mark">{{ ui.icon("check", "size-3") }}</span>
+    <span class="pill">{{ p.count }}</span>
+  </label>
+  {% endfor %}
+
+  <label class="input-icon mt-2">
+    {{ ui.icon("folder-plus") }}
+    <input type="text" name="new_playlist" class="input" placeholder="New playlist"
+           aria-label="New playlist" maxlength="60" autocomplete="off">
+  </label>
+</form>
+{% endblock %}
+{% block footer %}
+<footer class="dialog-actions">
+  <button type="button" class="btn btn-ghost btn-icon" data-close-dialog aria-label="Cancel" title="Cancel">{{ ui.icon("x") }}</button>
+  <button type="submit" id="save-submit" form="save-form" class="btn btn-primary btn-icon"
+          aria-label="Save" title="Save">{{ ui.icon("check") }}</button>
+</footer>
+{% endblock %}

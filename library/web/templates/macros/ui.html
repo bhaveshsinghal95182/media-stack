@@ -18,10 +18,10 @@
 <div class="relative aspect-[2/3] {{ class }} shrink-0 overflow-hidden rounded-md bg-surface-2">{{ poster(src, kind) }}</div>
 {%- endmacro %}
 
-{# "on disk" / "downloading 40%" / "missing" from titles.overview, over a poster. #}
+{# "on disk" / "downloading 40%" / "missing" from titles.overview. #}
 {% macro status_pill(status) -%}
-{% set dot = "bg-ok" if status == "on disk" else "bg-accent" if status.startswith("downloading") else "bg-warn" %}
-<span class="pill pill-overlay"><span class="size-1.5 rounded-full {{ dot }}"></span>{{ status }}</span>
+{% set tone = "pill-ok" if status == "on disk" else "pill-accent" if status.startswith("downloading") else "pill-warn" %}
+<span class="pill {{ tone }}">{{ status }}</span>
 {%- endmacro %}
 
 {% macro episode_pill(status) -%}
@@ -37,13 +37,15 @@
 <div class="empty"><span class="spinner"></span>{{ text }}</div>
 {%- endmacro %}
 
-{# "Save for later": posts the title's details to the watchlist. #}
-{% macro watchlist_button(item, saved=False) -%}
+{# "Save for later": opens the dialog that picks playlists (or none). #}
+{% macro watchlist_button(item, saved=False, oob=False) -%}
+{% set ident = "save-" ~ item.kind ~ "-" ~ item.ext_id if item else "" %}
 {% if saved %}
-<button type="button" class="btn" disabled>{{ icon("bookmark-check") }}Saved</button>
+<button type="button"{% if ident %} id="{{ ident }}"{% endif %} class="btn" disabled{% if oob %} hx-swap-oob="outerHTML"{% endif %}>{{ icon("bookmark-check") }}<span class="max-sm:sr-only">Saved</span></button>
 {% else %}
-<button type="button" class="btn" hx-post="/watchlist/items" hx-swap="outerHTML" hx-disabled-elt="this"
-        hx-vals='{{ item|tojson }}'>{{ icon("bookmark") }}Save for later</button>
+<button type="button" id="{{ ident }}" class="btn" hx-get="/watchlist/save" hx-vals='{{ item|tojson }}'
+        hx-target="#dialog-body" hx-disabled-elt="this" title="Save for later"
+        aria-label="Save {{ item.title }} for later">{{ icon("bookmark") }}<span class="max-sm:sr-only">Save</span></button>
 {% endif %}
 {%- endmacro %}
 

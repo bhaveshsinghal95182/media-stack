@@ -3,14 +3,26 @@
 (() => {
   const dialog = () => document.getElementById("dialog");
 
-  // ---- dialog: anything swapped into #dialog-body opens it ----
+  // ---- dialog: a request into #dialog-body opens it at once with a spinner (lookups can
+  // take a second or two); a failed request closes it again if nothing arrived ----
+  const intoDialog = (e) => e.detail.target?.id === "dialog-body";
+  document.addEventListener("htmx:beforeRequest", (e) => {
+    if (!intoDialog(e) || dialog().open) return;
+    e.detail.target.innerHTML = '<div class="empty" data-dialog-loading><span class="spinner"></span>Loading…</div>';
+    dialog().showModal();
+  });
+  document.addEventListener("htmx:afterRequest", (e) => {
+    if (intoDialog(e) && !e.detail.successful && e.detail.target.querySelector("[data-dialog-loading]")) dialog().close();
+  });
   document.addEventListener("htmx:afterSwap", (e) => {
-    if (e.detail.target.id === "dialog-body" && !dialog().open) dialog().showModal();
+    if (intoDialog(e) && !dialog().open) dialog().showModal();
   });
   document.addEventListener("click", (e) => {
     // [data-close-dialog], or a click on the backdrop (outside the dialog's content)
     if (e.target.closest("[data-close-dialog]") || e.target === dialog()) dialog().close();
   });
+  // The server asks for this after an action that finishes inside the dialog.
+  document.body.addEventListener("close-dialog", () => dialog().close());
 
   // ---- toasts: the server sends HX-Trigger {"toast": {"message", "level"}} ----
   function toast(message, level = "ok") {
@@ -48,6 +60,9 @@
       }
       const empty = group.querySelector("[data-filter-empty]");
       if (empty) empty.hidden = shown > 0;
+      if (group.hasAttribute("data-filter-section")) {
+        group.hidden = shown === 0 && Boolean(text || kind !== "all");
+      }
     }
   }
   const scopeOf = (el) => el.closest?.("[data-filter-scope]");
@@ -63,7 +78,8 @@
     .filter((box) => !box.closest("[hidden]"));
   function syncSelection() {
     for (const button of document.querySelectorAll("[data-selection]")) {
-      const n = document.querySelectorAll(`${button.dataset.selection} input[type=checkbox]:checked`).length;
+      const boxes = document.querySelectorAll(`${button.dataset.selection} input[type=checkbox]:checked`);
+      const n = new Set([...boxes].map((box) => box.value)).size;  // a title in two playlists counts once
       button.disabled = n === 0;
       const count = button.querySelector("[data-count]");
       if (count) count.textContent = n ? `(${n})` : "";
@@ -83,17 +99,43 @@
     if (e.target.dataset.check) document.getElementById(e.target.dataset.check).checked = true;
   });
 
+  // ---- playlists fold like folders; the choice is remembered across reloads ----
+  const FOLDED = "watchlist-folded";
+  const folded = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(FOLDED) || "[]")); } catch { return new Set(); }
+  };
+  function applyFolds() {
+    const shut = folded();
+    for (const button of document.querySelectorAll("[data-collapse]")) {
+      const key = button.dataset.collapse;
+      const closed = shut.has(key);
+      button.setAttribute("aria-expanded", String(!closed));
+      const body = document.getElementById(`group-${key}`);
+      if (body) body.hidden = closed;
+    }
+  }
+  document.addEventListener("click", (e) => {
+    const button = e.target.closest("[data-collapse]");
+    if (!button) return;
+    const shut = folded();
+    const key = button.dataset.collapse;
+    if (shut.has(key)) shut.delete(key); else shut.add(key);
+    try { localStorage.setItem(FOLDED, JSON.stringify([...shut])); } catch {}
+    applyFolds();
+  });
+
   // ---- on phones the nav scrolls sideways: keep the current page's link in view ----
   const revealNav = () => document.querySelector("nav [aria-current=page]")
     ?.scrollIntoView({block: "nearest", inline: "nearest"});
-  document.addEventListener("DOMContentLoaded", revealNav);
+  document.addEventListener("DOMContentLoaded", () => { revealNav(); applyFolds(); });
 
-  // ---- after every swap: re-apply filters, selections, and keep logs scrolled to the end ----
+  // ---- after every swap: re-apply filters, selections, folds, and keep logs scrolled to the end ----
   document.addEventListener("htmx:afterSettle", (e) => {
     if (e.detail.target === document.body) revealNav();  // a boosted page change
     const scope = scopeOf(e.detail.target);
     if (scope) applyFilter(scope);
     syncSelection();
+    applyFolds();
     for (const log of document.querySelectorAll(".log[data-tail]")) log.scrollTop = log.scrollHeight;
   });
 })();

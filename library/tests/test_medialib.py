@@ -4,12 +4,14 @@ import unittest
 import unittest.mock
 
 from medialib import Kind, LibraryError
+from medialib.details import library_details, lookup_details
 from medialib.files import local_subs, local_videos, parse_sxxexx
 from medialib.fmt import eta, human, safe_name
 from medialib.following import refresh_series
 from medialib.importer import ImportFolder
 from medialib.orphans import claimed_hashes
 from medialib.rescue import ImportRescuer
+from medialib.seasons import get_season, season_rows
 from medialib.watchlist import Watchlist, watchlist_send
 
 
@@ -119,7 +121,7 @@ class WatchlistSend(unittest.TestCase):
 
 class FakeArr:
     def __init__(self, name, routes, queue):
-        self.name, self.routes, self._queue, self.commands = name, routes, queue, []
+        self.name, self.routes, self._queue, self.commands, self.sent = name, routes, queue, [], []
 
     def get(self, path, **params):
         key = path + ("?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -132,6 +134,10 @@ class FakeArr:
     def command(self, body):
         self.commands.append(body)
         return {}
+
+    def send(self, method, path, body=None, **params):
+        self.sent.append((method, path, body))
+        return body
 
 
 class FakeQB:
@@ -281,6 +287,121 @@ class Claimed(unittest.TestCase):
         self.assertEqual(claimed_hashes(st, torrents), {"lib"})
         st.volume = FakeVolume(None)  # can't see the disk: trust history
         self.assertEqual(claimed_hashes(st, torrents), {"gone"})
+
+
+class Details(unittest.TestCase):
+    movie = {"id": 5, "title": "Mirai", "year": 2018, "tmdbId": 9, "imdbId": "tt1", "runtime": 98,
+             "studio": "Studio Chizu", "status": "released", "genres": ["Animation"],
+             "ratings": {"imdb": {"value": 7}, "tmdb": {"value": 7.157}, "trakt": {"value": 7.3}},
+             "originalLanguage": {"name": "Japanese"}, "path": "/data/media/movies/Mirai (2018)",
+             "sizeOnDisk": 1536, "monitored": True,
+             "images": [{"coverType": "poster", "remoteUrl": "p.jpg"}, {"coverType": "fanart", "remoteUrl": "f.jpg"}],
+             "movieFile": {"relativePath": "Mirai.mkv", "quality": {"quality": {"name": "Bluray-1080p"}},
+                           "mediaInfo": {"resolution": "1920x1036", "videoCodec": "x264",
+                                         "audioLanguages": "jpn/und", "subtitles": "eng/eng"}}}
+
+    def stack(self, routes):
+        return FakeStack(FakeArr("Sonarr", routes, []), FakeQB([]),
+                         radarr=FakeArr("Radarr", routes, []))
+
+    def test_movie_in_the_library(self):
+        d = library_details(self.stack({"/movie/5": self.movie}), "movie", 5)
+        self.assertEqual((d["title"], d["runtime"], d["maker"], d["status"]),
+                         ("Mirai", "98 min", "Studio Chizu", "Released"))
+        self.assertEqual(d["scores"], ["IMDb 7.0", "TMDB 7.2"])  # trakt isn't shown
+        self.assertEqual((d["poster"], d["fanart"], d["sizeHuman"]), ("p.jpg", "f.jpg", "1.5 KB"))
+        self.assertEqual(d["file"], {"name": "Mirai.mkv", "quality": "Bluray-1080p", "video": "1920x1036 x264",
+                                     "audio": "jpn, unknown", "subtitles": "eng"})
+        self.assertEqual([name for name, _ in d["links"]], ["IMDb", "TMDB"])
+        self.assertTrue(d["inLibrary"])
+
+    def test_show_from_the_lookup(self):
+        show = {"title": "Frieren", "tvdbId": 424536, "network": "Nippon TV", "status": "continuing",
+                "ratings": {"value": 8.83}, "nextAiring": "1970-01-02T00:00:00Z"}
+        d = lookup_details(self.stack({"/series/lookup": [show]}), "show", 424536)
+        self.assertEqual((d["maker"], d["status"], d["scores"], d["nextAiring"]),
+                         ("Nippon TV", "Still airing", ["8.8/10"], 86400))
+        self.assertEqual(d["links"], [("TVDB", "https://thetvdb.com/dereferrer/series/424536")])
+        self.assertFalse(d["inLibrary"])
+        self.assertNotIn("id", d)  # the dialog offers library actions only for library titles
+
+
+class AddBody(unittest.TestCase):
+    """Titles added here get the profile and folder Seerr would pick, anime included."""
+
+    def setUp(self):
+        sonarr = FakeArr("Sonarr", {"/qualityprofile": [{"id": 6, "name": "HD"}, {"id": 7, "name": "Anime 1080p"}],
+                                    "/rootfolder": [{"path": "/data/media/tv"}]}, [])
+        self.stack = FakeStack(sonarr, FakeQB([]))
+        self.stack.seerr_settings = {"sonarr": [{"isDefault": True, "activeProfileId": 6,
+                                                 "activeDirectory": "/data/media/tv",
+                                                 "activeAnimeProfileId": 7}]}
+
+    def test_anime_gets_the_anime_profile(self):
+        body = Kind(self.stack, "show").add_body({"title": "Frieren", "genres": ["Anime", "Drama"]}, True)
+        self.assertEqual((body["qualityProfileId"], body["seriesType"]), (7, "anime"))
+        self.assertEqual(body["rootFolderPath"], "/data/media/tv")  # no anime folder set: the usual one
+
+    def test_other_shows_get_the_default(self):
+        body = Kind(self.stack, "show").add_body({"title": "Severance", "genres": ["Drama"]}, True)
+        self.assertEqual(body["qualityProfileId"], 6)
+        self.assertNotIn("seriesType", body)
+
+
+AIRED, LATER = "1970-01-02T00:00:00Z", "2999-01-01T00:00:00Z"
+
+
+def ep(id_, season, has_file=False, air=AIRED):
+    return {"id": id_, "seasonNumber": season, "hasFile": has_file, "airDateUtc": air, "monitored": False}
+
+
+class Seasons(unittest.TestCase):
+    """Getting a season downloads what's missing, never what was watched and removed."""
+
+    def make(self, episodes, queue=(), deleted=()):
+        series = {"id": 5, "title": "Frieren", "monitored": True,
+                  "seasons": [{"seasonNumber": 0, "monitored": False}, {"seasonNumber": 1, "monitored": True},
+                              {"seasonNumber": 2, "monitored": False}]}
+        history = [{"eventType": "episodeFileDeleted", "episodeId": i, "data": {"reason": "Manual"}}
+                   for i in deleted]
+        history.append({"eventType": "episodeFileDeleted", "episodeId": 1, "data": {"reason": "Upgrade"}})
+        self.sonarr = FakeArr("Sonarr", {"/series/5": series, "/episode": episodes,
+                                         "/history/series": history},
+                              [{"seriesId": 5, "episodeId": i} for i in queue])
+        self.stack = FakeStack(self.sonarr, FakeQB([]))
+        return series
+
+    def test_rows_count_missing_removed_and_downloading(self):
+        series = self.make([ep(1, 1, True), ep(2, 1), ep(3, 1), ep(4, 1), ep(5, 1, air=LATER),
+                            ep(6, 2), ep(7, 0)], queue=[3], deleted=[4])
+        rows = season_rows(Kind(self.stack, "show"), series)
+        self.assertEqual([r["number"] for r in rows], [1, 2])  # specials only once some are on disk
+        s1 = rows[0]
+        self.assertEqual((s1["have"], s1["total"], s1["missing"], s1["downloading"], s1["upcoming"], s1["removed"]),
+                         (1, 5, 1, 1, 1, 1))
+
+    def test_get_partial_season_searches_only_missing(self):
+        self.make([ep(1, 1, True), ep(2, 1), ep(4, 1), ep(5, 1, air=LATER), ep(6, 2)], deleted=[4])
+        res = get_season(self.stack, 5, 1)
+        put_series, unmonitor, monitor = self.sonarr.sent
+        self.assertEqual(put_series[1], "/series/5")
+        self.assertTrue(put_series[2]["monitored"])
+        self.assertTrue(next(s for s in put_series[2]["seasons"] if s["seasonNumber"] == 1)["monitored"])
+        self.assertEqual(unmonitor[2], {"episodeIds": [4], "monitored": False})  # watched & removed stays out
+        self.assertEqual(monitor[2], {"episodeIds": [2, 5], "monitored": True})
+        self.assertEqual(self.sonarr.commands, [{"name": "EpisodeSearch", "episodeIds": [2]}])
+        self.assertIn("Skipped 1", res["message"])
+
+    def test_get_whole_season_uses_season_search(self):
+        self.make([ep(1, 1, True), ep(6, 2), ep(8, 2)])
+        get_season(self.stack, 5, 2)
+        self.assertEqual(self.sonarr.commands, [{"name": "SeasonSearch", "seriesId": 5, "seasonNumber": 2}])
+
+    def test_nothing_to_get(self):
+        self.make([ep(1, 1, True), ep(4, 1)], deleted=[4])
+        with self.assertRaises(LibraryError):
+            get_season(self.stack, 5, 1)
+        self.assertEqual(self.sonarr.sent, [])
 
 
 if __name__ == "__main__":

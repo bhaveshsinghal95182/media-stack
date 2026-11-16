@@ -53,6 +53,14 @@ class Helpers(unittest.TestCase):
         self.assertTrue(j.is_due(e, 1, 3 * DAY, low_space=True))
         self.assertFalse(j.is_due(dict(e, favourite=True), 9 * DAY, 3 * DAY, low_space=True))
 
+    def test_rolling_window_shows_have_a_shorter_grace(self):
+        ep = {"kind": "episode", "path": "/data/media/tv/One Piece/Season 21/e1.mkv"}
+        dirs = ["/data/media/tv/One Piece/"]
+        self.assertEqual(j.grace_for(ep, dirs, 3 * DAY, DAY), DAY)
+        self.assertEqual(j.grace_for(dict(ep, path="/data/media/tv/Other/e1.mkv"), dirs,
+                                     3 * DAY, DAY), 3 * DAY)
+        self.assertEqual(j.grace_for(dict(ep, kind="movie"), dirs, 3 * DAY, DAY), 3 * DAY)
+
     def test_guard_action(self):
         self.assertEqual(j.guard_action(10, False, 20, 25), "pause")
         self.assertEqual(j.guard_action(10, True, 20, 25), "pause")
@@ -161,6 +169,25 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class ScheduledList(unittest.TestCase):
+    def test_removed_items_leave_the_list_straight_away(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [os.path.join(tmp, f"e{n}.mkv") for n in (1, 2)]
+            for p in paths:
+                open(p, "w").close()
+            watched = {p: {"path": p, "kind": "episode", "series": "Show", "season": 1,
+                           "episode": n, "users": ["a"], "userIds": ["u"], "itemId": p,
+                           "title": "", "watchedAt": 0, "favourite": False}
+                       for n, p in enumerate(paths, 1)}
+            jan = j.Janitor(lambda: None, None)
+            jan._jellyfin_watched = lambda stack, now: watched
+            jan._rolling_dirs = lambda stack: []
+            jan._release_torrents = lambda stack: None
+            jan._remove = lambda stack, due: os.remove(paths[0])  # e2 fails to go
+            jan.clean(None, now=10 * DAY, low=True)
+            self.assertEqual([s["path"] for s in jan.status()["scheduled"]], [paths[1]])
+
+
 class ForceClean(unittest.TestCase):
     def test_force_skips_grace_and_refuses_while_a_check_runs(self):
         jan = j.Janitor(lambda: None, None)
@@ -171,3 +198,4 @@ class ForceClean(unittest.TestCase):
         jan.tick_lock.acquire()
         self.assertFalse(jan.force_clean())
         self.assertEqual(calls, [True])
+        self.assertTrue(jan.status()["running"])        # the page keeps polling meanwhile

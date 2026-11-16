@@ -1,0 +1,174 @@
+{% extends "dialogs/_frame.html" %}
+{# A title's details. From the library (t.id set) it shows files and library actions;
+   from the watchlist (`saved` set) it offers Download and Remove. #}
+{% set is_movie = t.kind == "movie" %}
+{% set from_library = t.id is defined %}
+{% block title %}{{ t.title }}{% endblock %}
+{% block body %}
+{% if t.fanart %}
+<div class="relative -mx-5 -mt-4 h-28 overflow-hidden bg-surface-2 sm:h-40">
+  <img src="{{ t.fanart }}" alt="" referrerpolicy="no-referrer" class="size-full object-cover opacity-70">
+  <div class="absolute inset-0 bg-gradient-to-t from-surface via-surface/30 to-transparent"></div>
+</div>
+{% endif %}
+<div class="relative flex gap-4 {{ '-mt-14 sm:-mt-20' if t.fanart }}">
+  {{ ui.thumb(t.poster, t.kind, "w-28 sm:w-40 rounded-lg shadow-lg ring-1 ring-line") }}
+  <div class="min-w-0 flex-1 space-y-2 {{ 'pt-16 sm:pt-22' if t.fanart }}">
+    {% set meta = [t.year, t.runtime, t.certification, t.maker]|select|join(" · ") %}
+    {% if meta %}<p class="text-sm text-muted">{{ meta }}</p>{% endif %}
+    {% if t.status or t.nextAiring %}
+    <p class="text-sm font-medium">{{ t.status }}{% if t.nextAiring %}<span class="text-accent"> · next episode {{ t.nextAiring|rel_time }}</span>{% endif %}</p>
+    {% endif %}
+    {% if t.scores or t.genres %}
+    <p class="flex flex-wrap gap-1">
+      {% for s in t.scores %}<span class="pill pill-accent">{{ s }}</span>{% endfor %}
+      {% for g in t.genres[:5] %}<span class="pill">{{ g }}</span>{% endfor %}
+    </p>
+    {% endif %}
+    {% if t.language %}<p class="text-xs text-muted">Original language: {{ t.language }}</p>{% endif %}
+    {% if t.links %}
+    <p class="flex flex-wrap gap-3 text-xs">
+      {% for name, url in t.links %}
+      <a href="{{ url }}" target="_blank" rel="noopener noreferrer" hx-boost="false"
+         class="inline-flex items-center gap-1 text-muted hover:text-fg">{{ name }} {{ ui.icon("external-link", "size-3") }}</a>
+      {% endfor %}
+    </p>
+    {% endif %}
+  </div>
+</div>
+
+{% if t.overview %}<p class="mt-4 text-sm leading-relaxed whitespace-pre-line break-words">{{ t.overview }}</p>{% endif %}
+
+{% if from_library %}
+  {% if is_movie %}
+  <h3 class="subhead mt-6">On disk</h3>
+    {% if t.file %}
+    <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+      {% for label, value in [("Quality", t.file.quality), ("Video", t.file.video), ("Audio", t.file.audio),
+                              ("Subtitles", t.file.subtitles), ("Size", t.sizeHuman), ("File", t.file.name)] if value %}
+      <dt class="text-muted">{{ label }}</dt><dd class="min-w-0 break-all">{{ value }}</dd>
+      {% endfor %}
+    </dl>
+    {% else %}
+    <p class="note">No file yet.</p>
+    {% endif %}
+  {% else %}
+  {% set r = t.rolling %}
+  {% set d = t.rollingDefaults %}
+  {# A long show with lots missing: offer the rolling window up front instead of whole seasons. #}
+  {% set long_gap = not r and (t.seasons|sum(attribute="missing")) > 2 * d.ahead %}
+  <h3 class="subhead mt-6">Rolling window</h3>
+  {% if r %}
+  <div class="panel">
+    <div class="row text-sm">
+      <span class="min-w-0 flex-1">
+        {% if r.position %}
+        <span class="block font-medium">Up to episode {{ r.position.number }} <span class="font-normal text-muted">· {{ r.position.code }}</span></span>
+        <span class="block truncate text-xs text-muted">{{ r.position.title }}</span>
+        {% else %}<span class="block font-medium">Caught up with every episode</span>{% endif %}
+      </span>
+      <span class="flex flex-wrap justify-end gap-1">
+        {% if r.counts["on disk"] %}<span class="pill pill-ok">{{ r.counts["on disk"] }} on disk</span>{% endif %}
+        {% if r.counts["downloading"] %}<span class="pill pill-accent">{{ r.counts["downloading"] }} downloading</span>{% endif %}
+        {% if r.counts["looking"] %}<span class="pill pill-warn">{{ r.counts["looking"] }} looking</span>{% endif %}
+        {% if r.counts["to air"] %}<span class="pill">{{ r.counts["to air"] }} to air</span>{% endif %}
+      </span>
+    </div>
+    {% for e in r.window %}
+    <div class="row text-sm">
+      <span class="w-12 shrink-0 text-muted tabular-nums">{{ e.number }}</span>
+      <span class="min-w-0 flex-1 truncate">{{ e.title or e.code }}</span>
+      {% if e.state == "on disk" %}<span class="pill pill-ok">on disk</span>
+      {% elif e.state == "downloading" %}<span class="pill pill-accent">downloading</span>
+      {% elif e.state == "looking" %}<span class="pill pill-warn">looking</span>
+      {% else %}<span class="pill">{{ e.airAt|rel_time if e.airAt else "to air" }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="note mt-2">Started at episode {{ r.start }}. Keeps the next {{ r.ahead }} unwatched episodes on disk; watching one grabs the next, and watched ones are removed a day later.</p>
+  {% endif %}
+  <details class="mt-2" {{ "open" if long_gap }}>
+    <summary class="cursor-pointer text-sm text-accent">{{ "Change the start or size" if r else "Watch from an episode, a few at a time" }}</summary>
+    <form class="mt-2 flex flex-wrap items-end gap-2" hx-post="/library/shows/{{ t.id }}/rolling" hx-target="#dialog-body" hx-disabled-elt="find button">
+      <span class="min-w-0 flex-1">
+        {% with tvdb_id=t.extId, start=r.start if r else None, ahead=r.ahead if r else d.ahead, max_ahead=d.max_ahead, check=None %}{% include "partials/rolling_fields.html" %}{% endwith %}
+      </span>
+      <button class="btn btn-primary">{{ ui.icon("download") }}{{ "Save" if r else "Start" }}</button>
+      {% if r %}
+      <button type="button" class="btn btn-danger" hx-post="/library/shows/{{ t.id }}/rolling/stop" hx-target="#dialog-body"
+              hx-confirm="Turn off the rolling window for {{ t.title }}? Episodes on disk stay; nothing new is downloaded.">{{ ui.icon("x") }}Stop</button>
+      {% endif %}
+    </form>
+    {% if not r %}<p class="note mt-1 text-xs">Keeps only the next few unwatched episodes on disk, grabs more as you watch, and removes each one a day after it's watched. The seasons below stop being downloaded as a whole.</p>{% endif %}
+  </details>
+
+  <h3 class="subhead mt-6">Seasons{% if t.sizeHuman %} <span class="font-normal normal-case tracking-normal">· {{ t.sizeHuman }}</span>{% endif %}</h3>
+  <div class="panel">
+    {% for s in t.seasons %}
+    {% set facts = ["%d/%d on disk"|format(s.have, s.total), s.sizeHuman,
+                    "%d to air"|format(s.upcoming) if s.upcoming,
+                    "%d watched & removed"|format(s.removed) if s.removed]|select|join(" · ") %}
+    <div class="row text-sm">
+      <span class="min-w-0 flex-1">
+        <span class="block font-medium">{{ s.label }}</span>
+        <span class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+          {{ facts }}
+          {% if s.downloading %}<span class="pill pill-accent">{{ s.downloading }} downloading</span>{% endif %}
+          {% if s.missing and not r %}<span class="pill pill-warn">{{ s.missing }} missing</span>{% endif %}
+        </span>
+      </span>
+      {% if r %}{# the rolling window decides what downloads #}
+      {% elif s.missing or (s.upcoming and not s.monitored) %}
+      {% set what = ("%d missing episode%s"|format(s.missing, "s" if s.missing != 1 else "")) if s.missing else "new episodes as they air" %}
+      {% set warn = " That's a lot: to start partway and keep only a few on disk, use Watch from an episode above instead." if s.missing > 2 * d.ahead else "" %}
+      <button type="button" class="btn btn-primary shrink-0" hx-post="/library/shows/{{ t.id }}/seasons/{{ s.number }}/get"
+              hx-target="#dialog-body" hx-disabled-elt="this"
+              hx-confirm="{{ s.label }} of {{ t.title }}: download {{ what }}?{{ warn }}">
+        {{ ui.icon("download") }}{{ "Get %d"|format(s.missing) if s.missing else "Get" }}</button>
+      {% elif not s.monitored %}<span class="pill">not wanted</span>{% endif %}
+    </div>
+    {% else %}
+    {{ ui.empty("No seasons listed yet.") }}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if t.monitored == false %}<p class="note mt-3 text-warn">Unmonitored: {{ "Radarr" if is_movie else "Sonarr" }} won't download anything new for it.</p>{% endif %}
+{% elif saved %}
+<p class="note mt-4">Saved to your watchlist {{ saved.added|rel_time }}.{% if t.inLibrary %} Already in {{ "Radarr" if is_movie else "Sonarr" }}.{% endif %}</p>
+{% if saved.playlistNames %}
+<p class="mt-2 flex flex-wrap gap-1">
+  {% for name in saved.playlistNames %}<span class="pill">{{ ui.icon("folder", "size-3") }}{{ name }}</span>{% endfor %}
+</p>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block footer %}
+{% if from_library %}
+<footer class="dialog-actions">
+  <button type="button" class="btn btn-danger mr-auto" hx-get="/library/{{ t.kind }}/{{ t.id }}/delete"
+          hx-target="#dialog-body">{{ ui.icon("trash") }}<span class="max-sm:sr-only">Delete</span></button>
+  {% if not is_movie %}
+  {% with show_id=t.id, hidden=t.hiddenFromTv, labelled=True %}{% include "partials/tv_button.html" %}{% endwith %}
+  {% endif %}
+  <button type="button" class="btn" hx-get="/releases/{{ t.kind }}/{{ t.id }}" hx-target="#dialog-body">{{ ui.icon("layers") }}Releases</button>
+</footer>
+{% elif saved %}
+{% set key = t.kind ~ ":" ~ t.extId %}
+{% set edit = {"kind": t.kind, "ext_id": t.extId, "title": t.title, "year": t.year or "",
+               "poster": t.poster or "", "overview": t.overview or ""} %}
+<footer class="dialog-actions">
+  <button type="button" class="btn btn-danger mr-auto" hx-post="/watchlist/remove" hx-swap="none" data-close-dialog
+          hx-vals='{{ {"kind": t.kind, "ext_id": t.extId}|tojson }}'>{{ ui.icon("x") }}Remove</button>
+  <button type="button" class="btn btn-icon" title="Playlists" aria-label="Playlists"
+          hx-get="/watchlist/save" hx-vals='{{ edit|tojson }}' hx-target="#dialog-body">{{ ui.icon("folder") }}</button>
+  {% if is_movie %}
+  <button type="button" class="btn btn-primary" hx-post="/watchlist/send" hx-vals='{{ {"key": key}|tojson }}'
+          hx-target="#dialog-body">{{ ui.icon("download") }}Download</button>
+  {% else %}
+  <button type="button" class="btn btn-primary" hx-target="#dialog-body"
+          hx-get="/following/follow?{{ {'title': t.title, 'tvdb_id': t.extId, 'origin': 'watchlist'}|urlencode }}">{{ ui.icon("download") }}Download…</button>
+  {% endif %}
+</footer>
+{% endif %}
+{% endblock %}

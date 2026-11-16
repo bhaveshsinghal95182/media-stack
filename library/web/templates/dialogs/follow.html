@@ -1,16 +1,20 @@
 {% extends "dialogs/_frame.html" %}
-{% block title %}Follow {{ title }}{% endblock %}
+{# origin: following (default), add or watchlist; the last two are downloading, not following. #}
+{% set adding = origin in ("add", "watchlist") %}
+{% block title %}{{ "Add" if adding else "Follow" }} {{ title }}{% endblock %}
 {% block body %}
 <form class="flex gap-2" hx-get="/following/follow" hx-target="#dialog-body" hx-disabled-elt="find button">
   <input type="hidden" name="title" value="{{ title }}">
   {% if season is not none %}<input type="hidden" name="season" value="{{ season }}">{% endif %}
   <input type="hidden" name="unsure" value="{{ 'true' if unsure else 'false' }}">
+  <input type="hidden" name="origin" value="{{ origin }}">
   <input type="text" name="q" class="input" value="{{ query }}" placeholder="Title" aria-label="Title">
   <button class="btn">{{ ui.icon("search") }}<span class="max-sm:sr-only">Search</span></button>
 </form>
 
 <form id="follow-form" hx-post="/following/follow" hx-target="#dialog-body" hx-disabled-elt="#follow-submit" class="mt-3">
   <input type="hidden" name="title" value="{{ title }}">
+  <input type="hidden" name="origin" value="{{ origin }}">
   <div class="space-y-1" role="radiogroup" aria-label="Which show">
     {% for c in candidates %}
     {% set info = [c.network, c.status, (c.seasons|length ~ " season" ~ ("s" if c.seasons|length != 1)) if c.seasons else "no seasons listed yet"]|select|join(" · ") %}
@@ -33,6 +37,6 @@
 {% block footer %}
 <footer class="dialog-actions">
   <button type="button" class="btn" data-close-dialog>Cancel</button>
-  <button type="submit" id="follow-submit" form="follow-form" class="btn btn-primary" {{ "disabled" if not candidates }}>{{ ui.icon("bell") }}Follow</button>
+  <button type="submit" id="follow-submit" form="follow-form" class="btn btn-primary" {{ "disabled" if not candidates }}>{% if adding %}{{ ui.icon("download") }}Add &amp; download{% else %}{{ ui.icon("bell") }}Follow{% endif %}</button>
 </footer>
 {% endblock %}

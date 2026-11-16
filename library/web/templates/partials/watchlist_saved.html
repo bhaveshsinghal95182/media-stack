@@ -1,0 +1,4 @@
+{% import "macros/ui.html" as ui %}
+{# The response to saving: close the dialog and swap the button that opened it. #}
+<div></div>
+{{ ui.watchlist_button({"kind": item.kind, "ext_id": item.extId}, saved=True, oob=True) }}

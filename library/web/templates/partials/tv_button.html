@@ -1,7 +1,12 @@
 {% import "macros/ui.html" as ui %}
-{# Toggles whether the TV account can see a show; the response is this button again. #}
-<button type="button" class="btn btn-icon {{ 'btn-active' if hidden }}" hx-post="/library/shows/{{ show_id }}/tv-access"
-        hx-vals='{"hidden": {{ "false" if hidden else "true" }}}' hx-swap="outerHTML" hx-disabled-elt="this"
+{# Toggles whether the TV account can see a show; the response is this button again.
+   An icon on the library row; with `labelled`, a text button in the details dialog. #}
+{% set labelled = labelled|default(false) %}
+<button type="button" class="btn {{ 'btn-active' if hidden }} {{ '' if labelled else 'btn-icon' }}"
+        hx-post="/library/shows/{{ show_id }}/tv-access" hx-swap="outerHTML" hx-disabled-elt="this"
+        hx-vals='{{ {"hidden": not hidden, "labelled": labelled}|tojson }}'
         aria-pressed="{{ 'true' if hidden else 'false' }}"
         title="{{ 'Hidden on TV: click to show it again' if hidden else 'Hide from the TV account' }}"
-        aria-label="{{ 'Show on TV' if hidden else 'Hide on TV' }}">{{ ui.icon("eye-off" if hidden else "tv") }}</button>
+        {% if not labelled %}aria-label="{{ 'Show on TV' if hidden else 'Hide on TV' }}"{% endif %}>
+  {{- ui.icon("eye-off" if hidden else "tv") }}{% if labelled %}{{ "Hidden on TV" if hidden else "Hide on TV" }}{% endif -%}
+</button>

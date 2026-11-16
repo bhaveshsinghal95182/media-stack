@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
-<div id="janitor" hx-get="/cleanup/janitor" hx-trigger="load, janitor-changed from:body delay:8s">
+<div id="janitor" hx-get="/cleanup/janitor" hx-trigger="load, janitor-changed from:body delay:1s">
+  {{ ui.loading() }}
+</div>
+
+<div id="stalls" hx-get="/cleanup/stalls" hx-trigger="load, every 120s">
   {{ ui.loading() }}
 </div>
 

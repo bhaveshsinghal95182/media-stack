@@ -1,0 +1,14 @@
+{# Start episode + window size, for the follow dialog and the details dialog.
+   Needs tvdb_id, start (or none), ahead, max_ahead, and check (a radio id to tick, or none). #}
+<span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+  <label class="inline-flex items-center gap-1">from episode
+    <input type="number" name="start" min="1" inputmode="numeric" class="input w-24 py-0.5" value="{{ start or '' }}"
+           {% if check %}data-check="{{ check }}"{% endif %} aria-label="Start episode"
+           hx-get="/following/rolling/preview" hx-vals='{{ {"tvdb_id": tvdb_id}|tojson }}' hx-include="this"
+           hx-trigger="input changed delay:400ms" hx-target="next .rolling-preview" hx-sync="this:replace"></label>
+  <label class="inline-flex items-center gap-1">keep
+    <input type="number" name="ahead" min="1" max="{{ max_ahead }}" class="input w-16 py-0.5" value="{{ ahead }}"
+           {% if check %}data-check="{{ check }}"{% endif %} aria-label="Episodes to keep ahead">
+    ahead</label>
+</span>
+<span class="rolling-preview mt-1 block text-xs">{% with ep=None, error=None %}{% include "partials/rolling_preview.html" %}{% endwith %}</span>

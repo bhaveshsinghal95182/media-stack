@@ -111,27 +111,33 @@ class Kind:
         else:
             self.arr.command({"name": "SeriesSearch", "seriesId": item_id})
 
-    def profile_and_root(self) -> tuple[int, str]:
-        # Same defaults Seerr uses for requests, so both paths behave alike.
+    def profile_and_root(self, anime: bool = False) -> tuple[int, str]:
+        # Same defaults Seerr uses for requests, so both paths behave alike;
+        # Sonarr has separate ones for anime.
         seerr = self.stack.seerr_settings.get("radarr" if self.is_movie else "sonarr") or []
         default = next((s for s in seerr if s.get("isDefault")), seerr[0] if seerr else {})
+        prefix = "activeAnime" if anime and not self.is_movie else "active"
+        profile_id = default.get(f"{prefix}ProfileId") or default.get("activeProfileId")
+        profile_name = default.get(f"{prefix}ProfileName") or default.get("activeProfileName")
         profiles = self.arr.get("/qualityprofile")
-        prof = next((p for p in profiles if p["id"] == default.get("activeProfileId")), None) \
-            or next((p for p in profiles if p["name"] == default.get("activeProfileName")), None) \
+        prof = next((p for p in profiles if p["id"] == profile_id), None) \
+            or next((p for p in profiles if p["name"] == profile_name), None) \
             or profiles[0]
-        root = default.get("activeDirectory") or self.arr.get("/rootfolder")[0]["path"]
+        root = default.get(f"{prefix}Directory") or default.get("activeDirectory") \
+            or self.arr.get("/rootfolder")[0]["path"]
         return prof["id"], root
 
     def add_body(self, lookup_item: dict, monitored: bool) -> dict:
         """The POST body that adds a looked-up title, without add options."""
-        profile_id, root = self.profile_and_root()
+        anime = not self.is_movie and "anime" in [g.lower() for g in lookup_item.get("genres", [])]
+        profile_id, root = self.profile_and_root(anime)
         body = dict(lookup_item, qualityProfileId=profile_id, rootFolderPath=root,
                     monitored=monitored)
         if self.is_movie:
             body["minimumAvailability"] = "released"
         else:
             body["seasonFolder"] = True
-            if "anime" in [g.lower() for g in lookup_item.get("genres", [])]:
+            if anime:
                 body["seriesType"] = "anime"
         return body
 
@@ -146,11 +152,16 @@ class Kind:
         return self.arr.send("POST", "/" + self.res, body)
 
 
-def poster(item: dict) -> str | None:
+def image(item: dict, cover_type: str) -> str | None:
+    """An Arr item's image URL by type: poster, fanart, banner…"""
     for img in item.get("images") or []:
-        if img.get("coverType") == "poster":
+        if img.get("coverType") == cover_type:
             return img.get("remoteUrl") or img.get("url")
     return None
+
+
+def poster(item: dict) -> str | None:
+    return image(item, "poster")
 
 
 def summarize_lookup(k: Kind, r: dict) -> dict:

@@ -19,6 +19,8 @@ class WebConfig:
     watchlist_state: str
     watcher_state: str | None   # None: the airing watcher is off
     janitor_state: str | None   # None: watched cleanup is off
+    rolling_state: str | None = None   # None: rolling windows are kept in memory and not applied
+    stall_state: str | None = None     # None: stalled downloads are not rotated
 
     @classmethod
     def from_env(cls) -> WebConfig:
@@ -31,4 +33,7 @@ class WebConfig:
             watcher_state=os.environ.get("WATCHER_STATE", "/state/watcher.json")
             if _flag("LIBRARY_WATCHER") else None,
             janitor_state=os.environ.get("JANITOR_STATE", "/state/janitor.json")
-            if _flag("LIBRARY_JANITOR") else None)
+            if _flag("LIBRARY_JANITOR") else None,
+            rolling_state=os.environ.get("ROLLING_STATE", "/state/rolling.json"),
+            stall_state=os.environ.get("STALL_STATE", "/state/stalls.json")
+            if _flag("LIBRARY_ROTATE") else None)

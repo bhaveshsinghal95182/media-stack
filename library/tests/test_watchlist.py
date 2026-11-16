@@ -17,7 +17,7 @@ class WatchlistItems(unittest.TestCase):
         self.assertEqual(saved.items(), [{
             "kind": "movie", "extId": 1, "title": "The Matrix", "year": 1999,
             "poster": None, "overview": ("x " * 400).strip()[:watchlist.MAX_OVERVIEW],
-            "added": 10.0}])
+            "added": 10.0, "playlists": []}])
 
     def test_duplicate_updates_metadata_without_erasing_unsupplied_fields(self):
         saved = watchlist.Watchlist(None)
@@ -27,11 +27,11 @@ class WatchlistItems(unittest.TestCase):
                                    poster=" /new ", overview="New summary", now=2.0))
         self.assertEqual(saved.items()[0], {
             "kind": "show", "extId": 4, "title": "Updated", "year": 2022,
-            "poster": "/new", "overview": "New summary", "added": 1.0})
+            "poster": "/new", "overview": "New summary", "added": 1.0, "playlists": []})
         self.assertFalse(saved.add("show", 4, "Final", now=3.0))
         self.assertEqual(saved.items()[0], {
             "kind": "show", "extId": 4, "title": "Final", "year": 2022,
-            "poster": "/new", "overview": "New summary", "added": 1.0})
+            "poster": "/new", "overview": "New summary", "added": 1.0, "playlists": []})
 
     def test_items_are_newest_first_with_stable_ties_and_independent_copies(self):
         saved = watchlist.Watchlist(None)
@@ -100,7 +100,7 @@ class WatchlistPersistence(unittest.TestCase):
             self.assertEqual(loaded.items(), saved.items())
             with open(path, encoding="utf-8") as f:
                 raw = json.load(f)
-            self.assertEqual(raw, {"version": 1, "items": [
+            self.assertEqual(raw, {"version": 2, "playlists": {}, "items": [
                 saved.items()[1], saved.items()[0]]})
 
     def test_corrupt_json_is_renamed_and_preserved(self):
@@ -158,7 +158,8 @@ class WatchlistPersistence(unittest.TestCase):
             self.assertEqual(loaded[1]["year"], 2001)
             self.assertEqual(loaded[1]["added"], 1.0)
             self.assertEqual(set(loaded[1]),
-                             {"kind", "extId", "title", "year", "poster", "overview", "added"})
+                             {"kind", "extId", "title", "year", "poster", "overview", "added",
+                              "playlists"})
 
     def test_save_failure_rolls_back_add_and_remove(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +175,113 @@ class WatchlistPersistence(unittest.TestCase):
                     saved.remove("movie", 1)
                 self.assertEqual(saved.items(), original)
             self.assertEqual(watchlist.Watchlist(path).items(), original)
+
+
+class WatchlistPlaylists(unittest.TestCase):
+    def test_create_slugs_the_name_and_reuses_it_case_insensitively(self):
+        saved = watchlist.Watchlist(None)
+        playlist = saved.create_playlist("  The   Hunger  Games ")
+        self.assertEqual(playlist["name"], "The Hunger Games")
+        self.assertEqual(playlist["key"], "the-hunger-games")
+        self.assertEqual(saved.create_playlist("the hunger games")["key"], playlist["key"])
+        self.assertEqual(len(saved.playlists()), 1)
+
+    def test_blank_names_are_rejected(self):
+        saved = watchlist.Watchlist(None)
+        with self.assertRaises(ValueError):
+            saved.create_playlist("   ")
+        with self.assertRaises(ValueError):
+            saved.rename_playlist("anything", "  ")
+
+    def test_membership_is_replaced_and_unknown_keys_are_ignored(self):
+        saved = watchlist.Watchlist(None)
+        first = saved.create_playlist("First")["key"]
+        second = saved.create_playlist("Second")["key"]
+        saved.add("movie", 1, "One", playlists=[first, "not-a-real-playlist"])
+        self.assertEqual(saved.get("movie", 1)["playlists"], [first])
+        saved.add("movie", 1, "One", playlists=[second, first])
+        self.assertEqual(saved.get("movie", 1)["playlists"], [second, first])
+        self.assertTrue(saved.set_playlists("movie", 1, [first]))
+        self.assertFalse(saved.set_playlists("movie", 1, [first]))
+        self.assertEqual(saved.get("movie", 1)["playlists"], [first])
+        self.assertFalse(saved.set_playlists("movie", 99, [first]))
+
+    def test_deleting_a_playlist_unfiles_but_keeps_its_titles(self):
+        saved = watchlist.Watchlist(None)
+        playlist = saved.create_playlist("Halloween")["key"]
+        saved.add("movie", 1, "One", playlists=[playlist])
+        saved.add("movie", 2, "Two")
+        self.assertTrue(saved.delete_playlist(playlist))
+        self.assertTrue(saved.has("movie", 1))
+        self.assertEqual(saved.get("movie", 1)["playlists"], [])
+        self.assertEqual(saved.playlists(), [])
+        self.assertFalse(saved.delete_playlist(playlist))
+
+    def test_rename_keeps_the_key_and_refuses_a_clash(self):
+        saved = watchlist.Watchlist(None)
+        first = saved.create_playlist("First")["key"]
+        saved.create_playlist("Second")
+        saved.add("movie", 1, "One", playlists=[first])
+        self.assertTrue(saved.rename_playlist(first, "Better name"))
+        self.assertEqual(saved.playlist(first)["name"], "Better name")
+        self.assertEqual(saved.get("movie", 1)["playlists"], [first])
+        with self.assertRaises(ValueError):
+            saved.rename_playlist(first, "second")
+        self.assertFalse(saved.rename_playlist(first, "Better name"))
+        self.assertFalse(saved.rename_playlist("missing", "Any"))
+
+    def test_bulk_add_is_additive(self):
+        saved = watchlist.Watchlist(None)
+        playlist = saved.create_playlist("Keepers")["key"]
+        saved.add("movie", 1, "One", playlists=[playlist])
+        saved.add("movie", 2, "Two")
+        self.assertEqual(saved.add_to_playlists([("movie", 1), ("movie", 2), ("movie", 9)], playlist), 1)
+        self.assertEqual(saved.add_to_playlists([("movie", 1), ("movie", 2)], playlist), 0)
+        self.assertEqual(saved.playlists()[0]["count"], 2)
+        with self.assertRaises(ValueError):
+            saved.add_to_playlists([("movie", 1)], "missing")
+
+    def test_v1_loads_unfiled_and_the_next_write_is_v2(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "watchlist.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"version": 1, "items": [
+                    {"kind": "movie", "extId": 1, "title": "Old", "added": 1}]}, f)
+            saved = watchlist.Watchlist(path)
+            self.assertEqual(saved.items()[0]["playlists"], [])
+            playlist = saved.create_playlist("Later")
+            saved.add("movie", 1, "Old", playlists=[playlist["key"]])
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            self.assertEqual(raw["version"], 2)
+            self.assertEqual(raw["playlists"][playlist["key"]]["name"], "Later")
+            self.assertEqual(raw["items"][0]["playlists"], [playlist["key"]])
+
+    def test_bad_playlist_entries_are_skipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "watchlist.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"version": 2, "playlists": {
+                    "good": {"name": "Good", "created": 1},
+                    "BAD KEY": {"name": "Bad key", "created": 2},
+                    "nameless": {"created": 3},
+                }, "items": [
+                    {"kind": "movie", "extId": 1, "title": "One", "added": 1,
+                     "playlists": ["good", "missing"]},
+                ]}, f)
+            saved = watchlist.Watchlist(path)
+            self.assertEqual([p["key"] for p in saved.playlists()], ["good"])
+            self.assertEqual(saved.get("movie", 1)["playlists"], ["good"])
+
+    def test_playlists_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "watchlist.json")
+            saved = watchlist.Watchlist(path)
+            playlist = saved.create_playlist("Round trip")["key"]
+            saved.add("show", 2, "Show", playlists=[playlist], now=1.0)
+            loaded = watchlist.Watchlist(path)
+            self.assertEqual(loaded.items(), saved.items())
+            self.assertEqual(loaded.playlists(), saved.playlists())
 
 
 if __name__ == "__main__":

@@ -2,8 +2,10 @@
 
 Watched state comes from Jellyfin (any user counts). An episode or movie is removed
 GRACE_DAYS after it was last played, unless someone marked it (or its season/show) a
-favourite. Episodes: unmonitor (so Sonarr doesn't fetch it again), delete the file through
-Sonarr, then delete the torrent once none of its files are still hardlinked into the
+favourite. Episodes of shows on a rolling window (rolling.py) have a shorter grace,
+ROLLING_GRACE_DAYS, so a long show doesn't pile up watched episodes.
+
+Episodes: unmonitor (so Sonarr doesn't fetch it again), delete the file through Sonarr, then delete the torrent once none of its files are still hardlinked into the
 library; only then is the space actually free. Movies: the library's full delete.
 
 Library files are hardlinks into qB's downloads, so torrents are matched by inode, which
@@ -15,6 +17,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Callable
 
 from medialib import titles
 from medialib.background import run_forever
@@ -24,6 +27,7 @@ from medialib.state import load_json, save_json
 
 GB = 1024 ** 3
 GRACE_DAYS = float(os.environ.get("JANITOR_GRACE_DAYS", "3"))
+ROLLING_GRACE_DAYS = float(os.environ.get("JANITOR_ROLLING_GRACE_DAYS", "1"))
 PAUSE_BELOW = float(os.environ.get("JANITOR_PAUSE_BELOW_GB", "20")) * GB
 RESUME_ABOVE = float(os.environ.get("JANITOR_RESUME_ABOVE_GB", "25")) * GB
 TICK = 120            # disk guard
@@ -73,6 +77,13 @@ def merge_watched(per_user: list[tuple[str, list[dict]]], favourites: set[str],
     return out
 
 
+def grace_for(entry: dict, rolling_dirs: list[str], grace_s: float, rolling_s: float) -> float:
+    """The grace period for one watched item: shorter for a show on a rolling window."""
+    if entry["kind"] == "episode" and any(entry["path"].startswith(d) for d in rolling_dirs):
+        return rolling_s
+    return grace_s
+
+
 def is_due(entry: dict, now: float, grace_s: float, low_space: bool) -> bool:
     if entry["favourite"]:
         return False
@@ -109,8 +120,10 @@ def keep(stack, item_id: str, user_id: str) -> None:
 
 class Janitor:
     def __init__(self, make_stack, state_path: str | None, lock: threading.Lock | None = None,
-                 data_root: str = "/data", log_size: int = 80):
+                 data_root: str = "/data", log_size: int = 80,
+                 rolling: Callable[[], set[int]] | None = None):
         self.make_stack, self.state_path, self.data_root = make_stack, state_path, data_root
+        self.rolling = rolling or set  # Sonarr series ids on a rolling window
         self.op_lock = lock or threading.Lock()   # shared with the web page's jobs
         self.lock = threading.Lock()
         self.tick_lock = threading.Lock()
@@ -125,6 +138,7 @@ class Janitor:
         self.disk = {"free": None, "total": None}
         self.last_clean = 0.0
         self.last_error: str | None = None
+        self.requested = False  # "Check now"/"Force cleanup" started but not finished
         self._inodes: dict[int, list[str]] | None = None
 
     # -- bookkeeping --
@@ -173,6 +187,9 @@ class Janitor:
                     self.tick()
             except Exception as e:  # noqa: BLE001 - reported like a scheduled run
                 self._failed(e)
+            finally:
+                self.requested = False
+        self.requested = True  # before the thread starts, so the page polls straight away
         threading.Thread(target=run, daemon=True).start()
 
     def force_clean(self) -> bool:
@@ -240,17 +257,25 @@ class Janitor:
             favourites |= {f["Id"] for f in favs}
         return merge_watched(per_user, favourites, self.state["seen"], now)
 
+    def _rolling_dirs(self, stack) -> list[str]:
+        ids = self.rolling()
+        if not ids:
+            return []
+        return [s["path"].rstrip("/") + "/" for s in stack.sonarr.get("/series") if s["id"] in ids]
+
     def clean(self, stack, now: float, low: bool) -> None:
         watched = self._jellyfin_watched(stack, now)
-        grace = GRACE_DAYS * 86400
-        due = [e for e in watched.values() if is_due(e, now, grace, low)]
+        dirs = self._rolling_dirs(stack)
+        grace = {path: grace_for(e, dirs, GRACE_DAYS * 86400, ROLLING_GRACE_DAYS * 86400)
+                 for path, e in watched.items()}
+        due = [e for e in watched.values() if is_due(e, now, grace[e["path"]], low)]
         due.sort(key=lambda e: e["watchedAt"])
         with self.lock:
             self.kept = sum(1 for e in watched.values() if e["favourite"])
             self.scheduled = sorted(
-                ({"label": label(e), "kind": e["kind"], "users": e["users"],
+                ({"label": label(e), "kind": e["kind"], "users": e["users"], "path": e["path"],
                   "itemId": e["itemId"], "userId": e["userIds"][0],
-                  "watchedAt": e["watchedAt"], "removeAt": e["watchedAt"] + grace}
+                  "watchedAt": e["watchedAt"], "removeAt": e["watchedAt"] + grace[e["path"]]}
                  for e in watched.values() if not e["favourite"]),
                 key=lambda s: s["removeAt"])
         if due or self.state["pending"]:
@@ -258,6 +283,10 @@ class Janitor:
             with self.op_lock:
                 self._remove(stack, due[:MAX_PER_PASS])
                 self._release_torrents(stack)
+            # The list was made before removing; without this the page shows what was just
+            # removed until the next pass, up to CLEAN_EVERY later.
+            with self.lock:
+                self.scheduled = [s for s in self.scheduled if os.path.exists(s["path"])]
 
     def _remove(self, stack, due: list[dict]) -> None:
         movies = episodes = None
@@ -343,7 +372,9 @@ class Janitor:
         with self.lock:
             return {"disk": self.disk, "pauseBelow": PAUSE_BELOW, "resumeAbove": RESUME_ABOVE,
                     "paused": len(self.state["paused"]), "graceDays": GRACE_DAYS,
+                    "rollingGraceDays": ROLLING_GRACE_DAYS,
                     "scheduled": [dict(s) for s in self.scheduled], "kept": self.kept,
                     "waitingTorrents": len(self.state["pending"]),
                     "lastClean": self.last_clean or None, "lastError": self.last_error,
+                    "running": self.requested or self.tick_lock.locked(),
                     "log": list(reversed(self.log))}

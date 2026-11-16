@@ -14,7 +14,9 @@ from medialib.importer import ImportFolder
 from medialib.janitor import Janitor
 from medialib.jobs import JobRunner
 from medialib.rescue import ImportRescuer
+from medialib.rolling import RollingStore, RollingWindow
 from medialib.seasonal import anime_map
+from medialib.stalls import StallRotator
 from medialib.watcher import AiringWatcher
 from medialib.watchlist import Watchlist
 from web.config import WebConfig
@@ -30,8 +32,11 @@ class Services:
         self.watchlist = Watchlist(config.watchlist_state)
         self.op_lock = threading.Lock()  # one state-changing job (or janitor pass) at a time
         self.jobs = JobRunner(self.op_lock, scrub=self.import_folder.display)
+        self.rolling_store = RollingStore(config.rolling_state)
+        self.rolling = RollingWindow(self.make_stack, self.rolling_store, lock=self.op_lock)
         self.watcher: AiringWatcher | None = None
         self.janitor: Janitor | None = None
+        self.stalls: StallRotator | None = None
         self._orphans: tuple[float, int] | None = None  # (counted at, count)
         self._local = threading.local()
 
@@ -44,10 +49,18 @@ class Services:
                                          before_cycle=ImportRescuer())
             self.watcher.start()
             print("airing watcher on", flush=True)
+        if self.config.rolling_state:
+            self.rolling.start()
+            print("rolling windows on", flush=True)
         if self.config.janitor_state and stack.settings.local_data:
-            self.janitor = Janitor(self.make_stack, self.config.janitor_state, lock=self.op_lock)
+            self.janitor = Janitor(self.make_stack, self.config.janitor_state, lock=self.op_lock,
+                                   rolling=self.rolling.series_ids)
             self.janitor.start()
             print("watched cleanup on", flush=True)
+        if self.config.stall_state:
+            self.stalls = StallRotator(self.make_stack, self.config.stall_state, lock=self.op_lock)
+            self.stalls.start()
+            print("stalled-download rotation on", flush=True)
         print(f"media-library on :{self.config.port} (import folder {self.config.import_root})",
               flush=True)
 

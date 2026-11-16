@@ -62,6 +62,12 @@ def day_label(ts: float, now: float | None = None) -> str:
     return named or f"{day:%A} {day.day} {day:%b}"
 
 
+def short_date(ts: float) -> str:
+    """'12 Apr 2026'."""
+    day = date.fromtimestamp(ts)
+    return f"{day.day} {day:%b %Y}"
+
+
 def gigabytes(n: float) -> str:
     return f"{n / 1024**3:.0f} GB"
 
@@ -83,6 +89,7 @@ def _nav_badges(request: Request) -> dict:
 
 templates = Jinja2Templates(directory=HERE / "templates", context_processors=[_nav_badges])
 templates.env.filters.update(rel_time=rel_time, clock=clock, stamp=stamp, day_label=day_label,
+                             short_date=short_date,
                              human=human, gigabytes=gigabytes)
 templates.env.globals.update(nav=NAV, static_url=static_url, icons=ICONS)
 

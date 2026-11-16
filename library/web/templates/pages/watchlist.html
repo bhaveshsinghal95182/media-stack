@@ -11,13 +11,18 @@
       {{ ui.icon("search") }}
       <input type="search" class="input" placeholder="Filter the watchlist…" data-filter-text aria-label="Filter the watchlist">
     </label>
-    <button type="button" class="btn" data-select-all="#watchlist-list">Select all</button>
+    <button type="button" class="btn btn-icon" title="New playlist" aria-label="New playlist"
+            hx-get="/watchlist/playlists/new" hx-target="#dialog-body">{{ ui.icon("folder-plus") }}</button>
+    <button type="button" class="btn btn-icon" title="Select all" aria-label="Select all"
+            data-select-all="#watchlist-list">{{ ui.icon("check") }}</button>
+    <button type="button" class="btn btn-icon" title="Add selected to a playlist" aria-label="Add selected to a playlist"
+            disabled data-selection="#watchlist-list" hx-get="/watchlist/assign"
+            hx-include="#watchlist-list input[name=key]:checked" hx-target="#dialog-body">{{ ui.icon("folder") }}</button>
     <button type="button" class="btn btn-primary" disabled data-selection="#watchlist-list"
             hx-post="/watchlist/send" hx-include="#watchlist-list input[name=key]:checked" hx-target="#dialog-body"
-            hx-confirm="Download the selected titles now? A show downloads every episode.">
-      {{ ui.icon("download") }}Download selected <span data-count></span></button>
+            title="Download the selected movies" aria-label="Download the selected movies">
+      {{ ui.icon("download") }}<span data-count></span></button>
   </div>
-  <p class="note">Saved for later. Nothing downloads until you press Download; then it goes to Radarr/Sonarr and leaves this list. A show downloads every episode; to get only new ones, use Follow instead.</p>
   <div id="watchlist-list" class="mt-4" hx-get="/watchlist/list" hx-trigger="load, watchlist-changed from:body">
     {{ ui.loading() }}
   </div>

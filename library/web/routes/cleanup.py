@@ -1,4 +1,4 @@
-"""Cleanup: the disk, watched titles the janitor removes, and leftover torrents."""
+"""Cleanup: the disk, watched titles the janitor removes, stalled downloads, leftover torrents."""
 
 import time
 from typing import Annotated
@@ -23,6 +23,12 @@ def cleanup_page(request: Request):
 def janitor_status(request: Request, services: ServicesDep):
     status = services.janitor.status() if services.janitor else None
     return render(request, "partials/janitor.html", {"janitor": status, "now": time.time()})
+
+
+@router.get("/stalls")
+def stalls_status(request: Request, services: ServicesDep):
+    status = services.stalls.status() if services.stalls else None
+    return render(request, "partials/stalls.html", {"stalls": status, "now": time.time()})
 
 
 @router.post("/janitor/keep")

@@ -21,6 +21,12 @@
       <span class="block text-xs text-muted">Nothing is downloaded until the next episode airs.</span></span>
   </label>
   <label class="choice items-start">
+    <input type="radio" name="mode" value="from" id="mode-from" class="mt-1 accent-accent">
+    <span class="min-w-0 text-sm">Watch from an episode, a few at a time
+      {% with tvdb_id=options.tvdbId, start=None, ahead=options.ahead, max_ahead=options.max_ahead, check="mode-from" %}{% include "partials/rolling_fields.html" %}{% endwith %}
+      <span class="block text-xs text-muted">For long shows like One Piece: keeps only the next few unwatched episodes on disk, grabs more as you watch, and removes each one a day after it's watched.</span></span>
+  </label>
+  <label class="choice items-start">
     <input type="radio" name="mode" value="all" class="mt-1 accent-accent">
     <span class="text-sm">Every episode of the show
       <span class="block text-xs text-muted">All seasons now, then new ones as they air.</span></span>

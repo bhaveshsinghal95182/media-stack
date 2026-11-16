@@ -1,0 +1,32 @@
+{% extends "dialogs/_frame.html" %}
+{# File the selected titles into one or more playlists. Additive: nothing is unfiled here. #}
+{% block title %}Playlists{% endblock %}
+{% block body %}
+<form id="assign-form" class="space-y-1" hx-post="/watchlist/assign" hx-target="#dialog-body"
+      hx-disabled-elt="#assign-submit">
+  {% for key in keys %}<input type="hidden" name="key" value="{{ key }}">{% endfor %}
+
+  {% for p in playlists %}
+  <label class="choice">
+    <input type="checkbox" name="playlist" value="{{ p.key }}" class="sr-only">
+    {{ ui.icon("folder") }}
+    <span class="min-w-0 flex-1 truncate">{{ p.name }}</span>
+    <span class="choice-mark">{{ ui.icon("check", "size-3") }}</span>
+    <span class="pill">{{ p.count }}</span>
+  </label>
+  {% endfor %}
+
+  <label class="input-icon mt-2">
+    {{ ui.icon("folder-plus") }}
+    <input type="text" name="new_playlist" class="input" placeholder="New playlist"
+           aria-label="New playlist" maxlength="60" autocomplete="off">
+  </label>
+</form>
+{% endblock %}
+{% block footer %}
+<footer class="dialog-actions">
+  <button type="button" class="btn btn-ghost btn-icon" data-close-dialog aria-label="Cancel" title="Cancel">{{ ui.icon("x") }}</button>
+  <button type="submit" id="assign-submit" form="assign-form" class="btn btn-primary btn-icon"
+          aria-label="Add to playlist" title="Add to playlist">{{ ui.icon("check") }}</button>
+</footer>
+{% endblock %}

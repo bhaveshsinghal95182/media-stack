@@ -35,8 +35,10 @@
 <p class="note mt-3 text-warn">Couldn't load the TVDB mapping ({{ mapError }}); Follow will search Sonarr by title.</p>
 {% endif %}
 
+{# hx-disinherit: the cards' buttons must not pick up this reload's include/target, or Follow
+   sends the AniList season ("FALL") as the TVDB season and Save for later replaces the grid. #}
 <div class="card-grid mt-4" data-filter-group hx-get="/seasonal/grid" hx-include="#seasonal-form"
-     hx-target="#seasonal" hx-trigger="following-changed from:body">
+     hx-target="#seasonal" hx-trigger="following-changed from:body" hx-disinherit="*">
   {% for a in items %}
   {% set meta = [a.studios[0] if a.studios, a.format.replace("_", " ") if a.format, a.episodes ~ " eps" if a.episodes,
                  "★ " ~ a.score ~ "%" if a.score]|select|join(" · ") %}

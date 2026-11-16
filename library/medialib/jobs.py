@@ -30,7 +30,7 @@ Work = Callable[[Log, Progress], Outcome]
 class Job:
     id: str
     title: str
-    refresh: str | None  # page event to fire when it finishes, e.g. "library-changed"
+    refresh: str | None  # page event(s) to fire when it finishes, space-separated
     status: str = "queued"  # queued -> running -> done | error
     log: list[str] = field(default_factory=list)
     progress: tuple[int, int] | None = None  # (bytes done, bytes total)

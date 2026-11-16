@@ -1,0 +1,26 @@
+{% import "macros/ui.html" as ui %}
+<h2 class="section-title">Stalled downloads · replaced automatically</h2>
+{% if not stalls %}
+<p class="note text-warn">Stalled-download rotation is off.</p>
+{% else %}
+<p class="note">A download that gets less than {{ stalls.minProgress|human }} further in {{ '%g'|format(stalls.stallMinutes) }} minutes is removed with its data and blocklisted, and Radarr/Sonarr grab the next release. If 10 minutes later they've found nothing their quality settings accept, the best release they turned down only for quality, size or format score is grabbed instead (never a cam or telesync). Downloads paused for low disk space or waiting in qBittorrent's queue don't count.
+  {% if stalls.lastRun %}Last check {{ stalls.lastRun|rel_time }}.{% endif %}
+  {% if stalls.lastError %}<span class="text-danger">Last error: {{ stalls.lastError }}</span>{% endif %}</p>
+<div class="panel mt-3 overflow-hidden">
+  {% for s in stalls.stalling %}
+  <div class="row">
+    <div class="min-w-0 flex-1">
+      <p class="truncate font-medium">{{ s.name }}</p>
+      <p class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+        <span class="pill">{{ s.state }}</span>
+        <span>{{ "%.1f"|format(s.progress * 100) }}% · no progress since {{ s.since|rel_time }} · {{ "replaced on the next check" if s.rotateAt <= now else "replaced " ~ s.rotateAt|rel_time }}</span>
+      </p>
+    </div>
+  </div>
+  {% else %}
+  {{ ui.empty("No download has stalled.") }}
+  {% endfor %}
+</div>
+<div class="log mt-3">{% for line in stalls.log %}{{ line.t|stamp }}  {{ line.msg }}
+{% else %}Nothing replaced yet.{% endfor %}</div>
+{% endif %}

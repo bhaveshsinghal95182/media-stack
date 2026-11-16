@@ -56,11 +56,20 @@
 @layer components {
   /* Layout */
   .toolbar { @apply mb-3 flex flex-wrap items-center gap-2; }
-  .poster-grid { @apply grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6; }
   .card-grid { @apply grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3; }
   .panel { @apply rounded-xl border border-line bg-surface shadow-xs; }
   .row { @apply flex items-center gap-3 border-t border-line px-3 py-2.5 first:border-t-0; }
+  /* The part of a row that opens its details: thumbnail and text. */
+  .row-open {
+    @apply -my-1 -ml-1.5 flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg py-1 pl-1.5 text-left transition-colors hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent;
+  }
   .section-title { @apply mt-8 mb-2.5 flex items-center gap-2 text-xs font-semibold tracking-wider text-muted uppercase; }
+  .group-head { @apply mt-8 mb-2.5 flex items-center gap-1 text-xs font-semibold tracking-wider text-muted uppercase; }
+  .group-toggle {
+    @apply flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:text-fg focus-visible:outline-2 focus-visible:outline-accent;
+    & > svg:first-child { @apply transition-transform; }
+    &[aria-expanded="false"] > svg:first-child { @apply -rotate-90; }
+  }
   .subhead { @apply mb-2 text-xs font-semibold tracking-wider text-muted uppercase; }
   .day-head { @apply border-t border-line bg-surface-2 px-3 py-1.5 text-xs font-semibold tracking-wide text-muted uppercase first:border-t-0; }
   .note { @apply text-sm text-muted; }
@@ -104,13 +113,21 @@
   .choice {
     @apply flex cursor-pointer items-center gap-3 rounded-lg border border-transparent p-2 transition-colors hover:bg-surface-2 has-checked:border-accent has-checked:bg-accent/8 has-focus-visible:border-accent;
   }
+  /* The tick on the right of a playlist row; the checkbox itself is screen-reader only. */
+  .choice-mark {
+    @apply grid size-4 shrink-0 place-items-center rounded-full border border-line text-accent-fg transition-colors;
+  }
+  .choice-mark > svg { @apply opacity-0 transition-opacity; }
+  .choice:has(input:checked) .choice-mark { @apply border-accent bg-accent; }
+  .choice:has(input:checked) .choice-mark > svg { @apply opacity-100; }
+  .choice-mark-on { @apply border-accent bg-accent; }
+  .choice-mark-on > svg { @apply opacity-100; }
 
   /* Bits */
   .pill { @apply inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium whitespace-nowrap text-muted; }
   .pill-ok { @apply bg-ok/12 text-ok; }
   .pill-accent { @apply bg-accent/12 text-accent; }
   .pill-warn { @apply bg-warn/12 text-warn; }
-  .pill-overlay { @apply bg-black/65 text-white backdrop-blur-sm; }
   .release { @apply flex items-start gap-3 border-t border-line py-3 first:border-t-0; }
   .release-title { @apply text-sm font-medium break-words; }
   .log { @apply max-h-56 overflow-auto rounded-lg bg-surface-2 px-3 py-2 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted; }
@@ -125,7 +142,8 @@
 
   /* The dialog and toasts */
   .dialog {
-    @apply m-auto max-h-[85dvh] w-[min(44rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-line bg-surface p-0 text-fg shadow-2xl backdrop:bg-black/50 backdrop:backdrop-blur-[2px];
+    /* open: a column, so the frame's body scrolls and its footer stays in view */
+    @apply m-auto max-h-[85dvh] w-[min(44rem,calc(100vw-1.5rem))] flex-col overflow-hidden open:flex rounded-2xl border border-line bg-surface p-0 text-fg shadow-2xl backdrop:bg-black/50 backdrop:backdrop-blur-[2px];
   }
   .dialog-actions { @apply flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3; }
   .toasts {
