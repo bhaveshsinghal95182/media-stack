@@ -16,9 +16,11 @@ hour the first time.
 | Radarr | http://localhost:7878 | Finds and downloads movies | this laptop only |
 | Sonarr | http://localhost:8989 | Finds and downloads TV shows and anime | this laptop only |
 | Prowlarr | http://localhost:9696 | Searches the torrent indexers for Radarr/Sonarr | this laptop only |
+| Bazarr | http://localhost:6767 | Downloads English subtitles that are still missing | this laptop only |
 | qBittorrent | http://localhost:8080 | Downloads the torrents | this laptop only |
 | FlareSolverr | (no page) | Helps Prowlarr get past Cloudflare checks | internal |
 | subgate | (no page) | Rejects downloads with no English subtitles and no English audio | internal |
+| Recyclarr | (no page) | Keeps Radarr/Sonarr's quality rules in line with the TRaSH Guides | internal |
 
 From another device on your Wi-Fi, replace `localhost` with the laptop's LAN
 address. `./media.sh lan-ip` prints it.
@@ -28,7 +30,8 @@ How a download flows:
 ```
 Seerr / Media library  ->  Radarr or Sonarr  ->  Prowlarr (indexers)
         ->  qBittorrent downloads  ->  subgate checks for English subs/audio
-        ->  Radarr/Sonarr move it into the library  ->  Jellyfin shows it
+        ->  Radarr/Sonarr move it into the library  ->  Bazarr adds missing subtitles
+        ->  Jellyfin shows it (Intro Skipper marks intros and credits)
 ```
 
 **Media is disposable by design.** `./media.sh destroy` deletes every download
@@ -176,10 +179,8 @@ choose **Forms**, then set a username and password.
    on. Under **Failed Download Handling**, turn on **Redownload** and **Redownload
    from Interactive Search**. That's how subgate's rejections lead to a new
    search.
-4. **Settings → Profiles**: the stack uses **HD-1080p** (Seerr requests use it
-   too).
-   - Optional: untick **Remux-1080p** in that profile. Remuxes are 20–40 GB,
-     often have few seeders, and caused a week-long stuck download once.
+4. **Settings → Profiles**: nothing to do. Recyclarr creates **HD Bluray + WEB**
+   in step 11.
 5. **Settings → General → Security → API Key**: copy it into `.env` as
    `RADARR_API_KEY`.
 
@@ -200,7 +201,8 @@ Open http://localhost:8989 and set up the login (Forms) the same way.
    as in Radarr.
 4. **Settings → Indexers** (Show Advanced): RSS Sync Interval `10` minutes, the
    lowest Sonarr allows. New anime episodes get picked up faster.
-5. **Settings → Profiles**: the stack uses **HD - 720p/1080p** for shows.
+5. **Settings → Profiles**: regular shows use the built-in **HD - 720p/1080p**.
+   Anime gets **Anime 1080p**, which Recyclarr creates in step 11.
 6. **Settings → General → API Key**: copy it into `.env` as `SONARR_API_KEY`.
 
 ---
@@ -281,6 +283,19 @@ the player restarts on QSV.
 On a machine without an NVIDIA GPU, delete `runtime: nvidia` and the two
 `NVIDIA_*` lines from the `jellyfin` service, and set `JELLYFIN_AC_HWACCEL=qsv`.
 
+### 9b. Intro Skipper (skip openings and credits)
+
+1. **Dashboard → Plugins → Repositories → +**: name `Intro Skipper`, URL
+   `https://intro-skipper.org/manifest.json`. Save.
+2. **Plugins → Catalog → Intro Skipper → Install**, then **Dashboard → Restart**.
+3. **Dashboard → Scheduled Tasks → Detect and Analyze Media Segments → ▶** for
+   what you already have. New episodes are analysed when they arrive.
+
+It compares the episodes of a season to find the shared opening and ending, so a
+season needs at least two episodes before it finds anything. Players then show
+a **Skip Intro** button. To skip without pressing anything: your user menu →
+**Settings → Playback → Media Segments**, set Intro/Outro to **Skip**.
+
 ---
 
 ## 10. Seerr (requests)
@@ -292,25 +307,61 @@ Open http://localhost:5055:
    account.
 2. Sync libraries and enable **Movies** and **Shows**.
 3. **Radarr**: hostname `radarr`, port `7878`, API key = Radarr's key, Test,
-   then profile **HD-1080p**, root folder `/data/media/movies`, minimum
-   availability **Released**. Tick **Default server**.
+   then profile **HD-1080p** for now (step 11 switches it), root folder
+   `/data/media/movies`, minimum availability **Released**. Tick **Default server**.
 4. **Sonarr**: hostname `sonarr`, port `8989`, API key = Sonarr's key, Test,
-   then quality profile and anime profile **HD - 720p/1080p**, root folder (and
-   anime root) `/data/media/tv`, Season Folders **on**. Tick **Default server**.
+   then quality profile and anime profile **HD - 720p/1080p** (step 11 switches
+   the anime one), root folder (and anime root) `/data/media/tv`, Season Folders
+   **on**. Tick **Default server**.
 5. Finish. Other people on your Wi-Fi can now request at `http://<LAN IP>:5055`.
 
 ---
 
 ## 11. Finish `.env` and start the custom parts
 
-`.env` should now have every value filled in. Recreate the two custom containers
-so they read it:
+`.env` should now have every value filled in. Recreate the containers that
+read it:
 
 ```bash
-docker compose up -d --build subgate library
+docker compose up -d --build subgate library recyclarr
 ./media.sh logs subgate     # expect "subgate started"; Ctrl+C to leave
 ./media.sh logs library     # expect "media-library on :8099" and "airing watcher on"
+docker compose exec recyclarr recyclarr sync   # first sync now instead of tonight
 ```
+
+**Recyclarr** applies the [TRaSH Guides](https://trash-guides.info) quality
+rules: which release groups are good, which encodes to avoid, sensible file
+sizes. Its settings are `recyclarr/media.yml` (in git); it syncs daily. It
+creates **HD Bluray + WEB** in Radarr and **Anime 1080p** in Sonarr. Both are
+tuned for a small disk: no upgrades once something is downloaded, no Remux,
+x265 allowed. After the first sync:
+
+1. Seerr → **Settings → Services**: Radarr profile **HD Bluray + WEB**; Sonarr
+   anime profile **Anime 1080p** (leave the normal profile as is).
+2. Existing titles: Radarr **Movies → Select Movies** (all) → Quality Profile
+   **HD Bluray + WEB**; Sonarr **Series → Select Series** (the anime) → **Anime
+   1080p**. Nothing re-downloads, since upgrades are off.
+
+The library page follows Seerr, so it uses the same profiles.
+
+### 11a. Bazarr (subtitles)
+
+Open http://localhost:6767:
+
+1. **Settings → Languages**: Languages Filter **English**. Add a Languages
+   Profile named `English` with English in it, then under **Default Settings**
+   turn on Series and Movies with that profile.
+2. **Settings → Providers**: add these; none needs an account:
+   - **TsukiHime** (anime), **Gestdown** and **TVSubtitles** (TV),
+     **YIFY Subtitles** (movies)
+   - Optional, with a free account: **OpenSubtitles.com**, the biggest source.
+3. **Settings → Sonarr**: on, address `sonarr`, port `8989`, Sonarr's key. Test,
+   Save. **Settings → Radarr**: same with `radarr`, `7878`, Radarr's key.
+4. **Settings → General → Analytics**: off.
+
+It runs on its own: new imports get English subtitles if they lack them, and it
+searches again every few hours for anything still missing. **Wanted** lists what
+it couldn't find; **History** shows what it fetched.
 
 Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
 `LIBRARY_PASSWORD`.
@@ -332,14 +383,22 @@ Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
     Use it when a download crawls.
   - **Delete**: removes the movie/show, its files, its torrent and the Seerr
     request, then checks that it's really gone.
+  - Click a title for its details. For a show, each season lists what's on
+    disk, missing, downloading and still to air. **Get** on a season makes
+    Sonarr download its missing episodes (and the rest as they air). Episodes
+    you watched and the cleanup removed are left out. To start partway
+    through a long show, use **Watch from an episode, a few at a time** above
+    the seasons (it opens by itself when lots of episodes are missing).
   - **Hide on TV** (the TV icon on a show): the Jellyfin `tv` account can no
     longer see or play that show. Press it again (crossed-out eye) to undo.
     Another account name goes in `.env` as `TV_USER`.
-- **Add**: search and download a movie or show, or **Save for later**.
+- **Add**: search and download a movie or show, or **Save for later**. A show
+  first asks what to get: the latest season, only new episodes, a few at a
+  time from an episode number (a rolling window), or every episode.
 - **Watchlist**: titles you saved for later. Nothing downloads until you press
   **Download** (one title) or tick several and **Download selected**. They
-  then go to Radarr/Sonarr and leave the list. A show downloads every episode;
-  use Follow if you only want new ones. The list is a file,
+  then go to Radarr/Sonarr and leave the list. A show's **Download** asks what
+  to get, the same choice as Add; **Download selected** sends only movies. The list is a file,
   `config/library/watchlist.json`, so `./media.sh destroy` doesn't touch it.
   The backup in step 13 includes it.
 - **Seasonal**: this season's anime from AniList. **Follow** makes Sonarr grab
@@ -349,14 +408,21 @@ Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
   follow. The airing watcher searches every indexer 5 min, 20 min, 45 min,
   1.5 h, 3 h, 6 h and 12 h after an episode airs, then twice a day for a week,
   until it's found.
+- **Rolling window** (for very long shows like One Piece, where TVDB's seasons
+  don't match arcs): Following → Follow → **Watch from an episode, a few at a
+  time**, or a show's details dialog → **Watch from an episode**. Type the
+  absolute episode number (the dialog shows which episode that is) and how many
+  to keep ahead (default 12). Only those episodes are wanted in Sonarr; as you
+  watch in Jellyfin, the next ones are grabbed, and watched ones are removed
+  after 1 day instead of 3. Settings live in `config/library/rolling.json`.
 - **Import**: copy a video from `IMPORT_DIR` into the library.
 - **Cleanup**:
   - **Disk:** how much space is left. Downloads pause on their own below 20 GB
     free and resume above 25 GB. The media shares the laptop's disk, so
     filling it would break more than the stack.
   - **Watched · removed automatically:** anything either Jellyfin user has
-    watched is removed 3 days after it was last played, and straight away when
-    space runs low.
+    watched is removed 3 days after it was last played (1 day for shows on a
+    rolling window), and straight away when space runs low.
     - Episodes are unmonitored first, so Sonarr won't download them again, and
       the show stays followed. Movies are deleted completely.
     - The torrent's data is deleted too. That's what actually frees the space.
@@ -364,8 +430,20 @@ Open http://localhost:8099 and log in with `LIBRARY_USERNAME` /
     - **Favourites in Jellyfin are never removed.** **Keep** marks an item as a
       favourite.
     - Change the timing in `compose.yaml` → `library` → `environment` with
-      `JANITOR_GRACE_DAYS`, `JANITOR_PAUSE_BELOW_GB` and
+      `JANITOR_GRACE_DAYS`, `JANITOR_ROLLING_GRACE_DAYS`, `JANITOR_PAUSE_BELOW_GB` and
       `JANITOR_RESUME_ABOVE_GB`. Set `LIBRARY_JANITOR: "0"` to turn it off.
+  - **Stalled downloads · replaced automatically:** a download that gets less
+    than 10 MiB further in 60 minutes is removed with its data and
+    blocklisted, the same as **Drop & try another**, and Radarr/Sonarr grab the
+    next release. If 10 minutes later they've found nothing their quality
+    settings accept, the library searches once more and grabs the best release
+    they turned down only for its quality, size or format score: something
+    beats nothing. Cam/telesync and unknown-quality releases are never taken,
+    and subgate still checks for English subtitles/audio. Downloads paused for low disk space or waiting in
+    qBittorrent's queue don't count, and the clock restarts after the laptop
+    was off or asleep. Change it in `compose.yaml` → `library` → `environment`
+    with `STALL_MINUTES` and `STALL_MIN_PROGRESS_MB`. Set `LIBRARY_ROTATE: "0"`
+    to turn it off.
   - **Leftover torrents:** torrents nothing uses. That covers ones subgate
     rejected, extra copies of an episode you already have, and old downloads.
     Tick them and delete. Nothing here is deleted automatically.
@@ -393,17 +471,21 @@ separate `.srt`) **or** English audio. Otherwise Radarr/Sonarr remove it,
 blocklist it and search for the next release. See what it decided with
 `./media.sh logs subgate`.
 
+**Bazarr** then fills gaps after the import: a movie added by hand or a release
+whose subtitles were only partial gets an `.en.srt` next to it.
+
 ---
 
 ## 13. Back up and restore
 
 Everything that took you an hour lives in `.env` and `config/`. Back them up,
-skipping Jellyfin's cache:
+skipping caches:
 
 ```bash
 cd ~/media-stack
 ./media.sh stop
 tar --exclude=config/jellyfin/cache --exclude=config/jellyfin/log \
+    --exclude=config/recyclarr/resources \
     -czf ~/media-stack-backup-$(date +%F).tar.gz .env config
 ./media.sh start
 ```
@@ -437,6 +519,9 @@ and run `sudo chown -R "$(id -u):$(id -g)" config`.
 | Seerr says "available" for something you deleted | Delete through the library page (it clears Seerr), or Seerr → the title → Manage → Clear Data. |
 | Library page says "too many failed logins" | Wait 10 minutes. It locks after 10 wrong passwords. |
 | subgate rejected something that did have English subs | `./media.sh logs subgate` shows what it saw. Releases → pick it manually and it's checked again. Or set `DRY_RUN: "true"` for subgate in `compose.yaml` to only log decisions. |
+| Subtitles from Bazarr are out of sync | Bazarr → the movie/series → the subtitle's menu → **Sync**, or delete it and pick another under **Manual Search**. |
+| No Skip Intro button | The season needs two or more episodes, and the scan must have run (Dashboard → Scheduled Tasks). Single-episode seasons usually get nothing until episode 2 arrives. |
+| Radarr/Sonarr say "custom format score below minimum" or "not an upgrade" | Expected: Recyclarr's profiles refuse known bad groups and never upgrade. Pick a release by hand under Releases, or change `recyclarr/media.yml` and run `docker compose exec recyclarr recyclarr sync`. |
 | A new anime episode isn't downloading | Following tab: status and watcher activity. Press **Search now**. If nothing is found, no indexer has it yet. |
 | TV can't find Jellyfin | Use `http://<LAN IP>:8096` directly. The laptop and TV must be on the same Wi-Fi. Allow port 8096 in any firewall. |
 | Cleanup says "no Jellyfin API key" or Jellyfin errors | Jellyfin → Dashboard → API Keys → +, put it in `.env` as `JELLYFIN_API_KEY`, then `docker compose up -d library`. |

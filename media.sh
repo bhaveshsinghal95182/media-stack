@@ -16,6 +16,7 @@ declare -A URLS=(
   [Prowlarr]="http://localhost:9696"
   [qBittorrent]="http://localhost:8080"
   [Library]="http://localhost:8099"
+  [Bazarr]="http://localhost:6767"
 )
 
 header() {
@@ -77,13 +78,13 @@ init_scratch() {
 # Bind-mount folders must exist and belong to the user before compose starts:
 # Docker creates missing ones as root, and subgate/library run as PUID.
 init_config() {
-  mkdir -p "$ROOT"/config/{jellyfin,prowlarr,radarr,sonarr,qbittorrent,seerr,subgate,library}
+  mkdir -p "$ROOT"/config/{jellyfin,prowlarr,radarr,sonarr,bazarr,recyclarr,qbittorrent,seerr,subgate,library}
 }
 
 show_urls() {
   echo
   echo "Local interfaces:"
-  for name in Seerr Jellyfin Library Radarr Sonarr Prowlarr qBittorrent; do
+  for name in Seerr Jellyfin Library Radarr Sonarr Prowlarr Bazarr qBittorrent; do
     printf '  %-12s %s\n' "$name" "${URLS[$name]}"
   done
 
@@ -262,7 +263,7 @@ case "$ACTION" in
     echo "  - every temporary download/media file"
     echo "  - ALL application configuration under ./config"
     echo "  - Jellyfin users/settings"
-    echo "  - Radarr/Sonarr/Prowlarr/qBittorrent/Seerr settings"
+    echo "  - Radarr/Sonarr/Prowlarr/Bazarr/Recyclarr/qBittorrent/Seerr settings"
     echo
     read -r -p "Type RESET to continue: " confirmation
     [[ "$confirmation" == "RESET" ]] || {
@@ -278,6 +279,8 @@ case "$ACTION" in
       "$ROOT/config/prowlarr" \
       "$ROOT/config/radarr" \
       "$ROOT/config/sonarr" \
+      "$ROOT/config/bazarr" \
+      "$ROOT/config/recyclarr" \
       "$ROOT/config/qbittorrent" \
       "$ROOT/config/seerr"
 
@@ -286,6 +289,8 @@ case "$ACTION" in
       "$ROOT/config/prowlarr" \
       "$ROOT/config/radarr" \
       "$ROOT/config/sonarr" \
+      "$ROOT/config/bazarr" \
+      "$ROOT/config/recyclarr" \
       "$ROOT/config/qbittorrent" \
       "$ROOT/config/seerr"
 

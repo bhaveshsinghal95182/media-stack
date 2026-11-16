@@ -54,6 +54,8 @@ Whisparr is not deployed), so treat the code and live config as the truth.
    │ Jellyfin │  Seerr   │ library  │   │ Radarr  │ Sonarr  │ Prowlarr │ qBittorrent │
    │  :8096   │  :5055   │  :8099   │   │  :7878  │  :8989  │  :9696   │    :8080    │
    └────┬─────┴────┬─────┴────┬─────┘   └────┬────┴────┬────┴────┬─────┴──────┬──────┘
+        │ (+ Intro Skipper plugin)           │ Bazarr :6767 (subs, localhost)  │
+        │                                    │ Recyclarr (no UI) → profiles/CFs│
         │ reads    │ requests │ API          │ search via Prowlarr│            │
         │ /data/   └──────────┴──────────────┤  (Prowlarr → FlareSolverr      │
         │ media                              │   for Cloudflare indexers)     │
@@ -74,7 +76,9 @@ The flow for one title:
    download → redownload" setting picks the next release.
 4. When the download completes, the Arr hardlinks it into
    `/data/media/movies` or `/data/media/tv`. Jellyfin's real-time monitoring
-   picks it up.
+   picks it up; Intro Skipper then fingerprints the season for intros/credits.
+5. Bazarr (Sonarr/Radarr SignalR) sees the import and downloads an English
+   `.srt` if the file has no English subtitle track.
 
 **Storage.** Everything under `/data` is the named Docker volume
 `media-stack-scratch`, mounted at `/data` in every container. Hardlinks only
@@ -98,7 +102,8 @@ compose.yaml            all services; subgate + library are built locally
 media.sh                lifecycle + `list|add|delete|orphans|import` → library/cli.py
 .env / .env.example     secrets and ids (PUID, PGID, TZ, QBIT_*, *_API_KEY, LIBRARY_*, IMPORT_DIR)
 SETUP.md                human, no-AI install guide; every UI setting by hand
-config/<app>/           app state (gitignored). config/library/{watcher,watchlist,janitor}.json, config/subgate/subgate.json
+recyclarr/media.yml     Recyclarr config (TRaSH profiles + our departures), mounted ro at /config/configs
+config/<app>/           app state (gitignored). config/library/{watcher,watchlist,janitor,rolling,stalls}.json, config/subgate/subgate.json
 backup/                 pre-edit file copies (gitignored)
 
 subgate/
@@ -113,13 +118,21 @@ library/
     settings.py stack.py  Settings from env/.env; Stack = the clients; Kind = movie/show specifics
     clients.py volume.py  http_json, Arr, QBit, Jellyfin; Volume (local /data or docker exec)
     titles.py             overview, add_title, delete_plan/delete_execute
+    details.py            the details dialog: Arr metadata (+ files/seasons for library titles)
+    seasons.py            season_rows (on disk / missing / downloading / to air / removed), get_season.
+                          "Removed" = Sonarr history episodeFileDeleted (not Upgrade): watched and
+                          cleaned up, so get_season keeps it unmonitored. Monitoring a season in
+                          Sonarr monitors all its episodes, hence the re-unmonitor afterwards.
     releases.py           downloads, release_info/search/grab/drop
     following.py          follow/unfollow/following, refresh_series, search_episodes
     seasonal.py           AniList + Fribb's TVDB/TMDB mapping
     importer.py           ImportFolder (the ~/Downloads guard), import_candidates/plan/execute
     orphans.py            claimed_hashes, orphan_list/orphans_delete
     tv_access.py          Hide on TV (Jellyfin BlockedTags)
+    rolling.py            rolling window (One Piece-style shows): RollingStore, apply/status,
+                          start_window/stop_window, preview (Sonarr, else skyhook), RollingWindow service
     rescue.py             ImportRescuer (watcher's before_cycle)
+    stalls.py             StallRotator: drops + blocklists downloads with no progress for STALL_MINUTES
     watcher.py watchlist.py janitor.py jobs.py   background services, JobRunner
     fmt.py files.py state.py errors.py           small helpers
   web/                  FastAPI + Jinja + htmx; a thin layer over medialib
@@ -193,6 +206,10 @@ Keep both paths working.
   event on any other value, even a truthy one. Write `change[target.name!='']`,
   not `change[target.name]`. The second form broke the Seasonal tab's
   format and sort controls.
+  htmx also **inherits** `hx-include`/`hx-target` down to child elements: a
+  container that reloads itself with them needs `hx-disinherit="*"`, or its
+  buttons send its fields too. That made the Seasonal tab's Follow send AniList's
+  `season=FALL` as the TVDB season (422) on 2026-10-16.
 - **Jobs:** long POSTs (add, delete, import, follow, send, orphan delete) run as
   background jobs (`medialib.jobs.JobRunner`). `partials/job.html` polls
   `/jobs/<id>` every second and fires the job's refresh event when done.
@@ -245,6 +262,30 @@ Keep both paths working.
   - **`unfollow`** sets the series to unmonitored and keeps the files.
   - **`following`** reads Sonarr's calendar from 2 days back to 14 days ahead
     and combines it with the watcher's per-episode info.
+- **Rolling window** (`rolling.py`; for very long shows whose TVDB seasons mean
+  nothing, e.g. One Piece, series 27, started at 1157 on 2026-10-16):
+  - The user gives an absolute episode number (`absoluteEpisodeNumber`, else the
+    position in (season, episode) order, specials excluded) and `ahead` (default
+    12, max 50). State: `/state/rolling.json` (`ROLLING_STATE`).
+  - **Watch position** = just after the last *done* episode from the start on.
+    Done = Sonarr history `episodeFileDeleted` (not Upgrade) or the file path is
+    in any Jellyfin user's played list. The window is the next `ahead` episodes
+    that aren't done; skipped episodes behind the position don't count.
+  - **The window owns monitoring.** `apply` sets the series monitored (Sonarr
+    only retries after a subgate reject on a monitored series), every season
+    unmonitored and `monitorNewItems="none"`: a monitored season monitors all its
+    episodes. Flipping a season flag makes Sonarr reset its episodes, so `apply`
+    re-reads the episodes after that PUT. Then it monitors the window, unmonitors
+    anything else without a file that isn't queued, and `EpisodeSearch`es aired
+    missing window episodes at most every 6 h each.
+  - `RollingWindow` (started by `Services.start_background`) applies every
+    window every 5 min under `op_lock`. It drops a window whose series is
+    deleted or unmonitored (unfollowed).
+  - The janitor's grace for these shows' episodes is `JANITOR_ROLLING_GRACE_DAYS`
+    (1, the user's choice) instead of 3; the window moves on as soon as Jellyfin
+    marks an episode played, before the file is removed.
+  - `preview` reads Sonarr's episodes, or for a show not added yet Sonarr's own
+    metadata source `skyhook.sonarr.tv/v1/tvdb/shows/en/<tvdb>` (cached 1 h).
 - **Seasonal** (`seasonal_anime`):
   - **AniList data.** AniList GraphQL `Page(media: season, year, ANIME)`, up to
     8 pages of 50. It **requires a User-Agent header**; Python's default gets
@@ -280,12 +321,41 @@ Keep both paths working.
       already have a file and retries a download at most hourly.
     - A pack whose files don't parse is logged for a manual import.
   - Sonarr's own RSS sync runs at 10 min, the minimum Sonarr allows.
-- **Watchlist** (`watchlist.py`: the store, `watchlist_view` and `watchlist_send`):
+- **Watchlist** (`watchlist.py`: the store, `watchlist_view`, `watchlist_sections` and
+  `watchlist_send`):
   - Titles saved for later live only in `/state/watchlist.json`
     (`config/library/`), keyed by (kind, extId). extId is the TMDB id for
     movies and the TVDB id for shows.
-  - Radarr/Sonarr don't know about them until they're sent. Sending calls
-    `add_title`, which adds and searches; a show gets every episode.
+  - **Playlists** (state v2): a title can be in any number of playlists.
+    `playlists` maps a slug key to `{name, created}`; each item carries
+    `playlists: [key, ...]`. Keys stay on rename, so the name is the only thing
+    that changes. v1 files (no playlists) still load; the next write is v2.
+    Deleting a playlist unfiles its titles, it never removes them. Names are
+    unique case-insensitively; `create_playlist` reuses an existing name.
+  - **Saving.** "Save" opens `partials/save_dialog.html`
+    (`GET /watchlist/save`) with checkboxes for the playlists and a "new
+    playlist" field. Nothing ticked means just the watchlist. The POST to
+    `/watchlist/items` replaces the membership (the dialog pre-checks it), and
+    its response closes the dialog with the `close-dialog` HX-Trigger event
+    (app.js listens) and OOB-swaps the button that opened it
+    (`id="save-<kind>-<extId>"`). Keep that id scheme when adding another save
+    entry point.
+  - **The page** shows folder sections: unfiled titles first, then every
+    playlist (a title in two playlists appears in both). Empty playlists are
+    shown so they can be renamed/deleted from the section header. The header
+    actions are icon-only (title + aria-label): pencil renaming, trash
+    deleting with `hx-confirm`. Folded sections are remembered in
+    `localStorage` (`watchlist-folded`).
+  - Filters (`data-filter-section`) hide a whole section while a text/kind
+    filter is active if none of its rows match. Selections count unique
+    `kind:extId` values, and `/watchlist/send` and `/watchlist/assign` de-dupe,
+    because a title can be checked in more than one section.
+  - Radarr/Sonarr don't know about them until they're sent. A movie is sent
+    with `add_title` (adds and searches). A show never is: its Download
+    button opens the follow dialog (`origin=watchlist`) to pick a season, new
+    episodes, a rolling window or everything, and leaves the list on success.
+    "Download selected" skips shows. The Add tab does the same for shows
+    (`origin=add`); only the CLI's `./media.sh add` still gets every episode.
   - Each title that's sent successfully is removed from the list. Failed ones
     stay.
   - Add-tab search results and Seasonal mark titles with `onWatchlist`.
@@ -326,6 +396,29 @@ Keep both paths working.
     The key comes from `JELLYFIN_API_KEY`, falling back to the one Seerr keeps
     in `config/seerr/settings.json`. Item ids change when Jellyfin rescans, so
     don't cache them.
+- **Stalled downloads** (`stalls.py` `StallRotator`, started by
+  `Services.start_background()` unless `LIBRARY_ROTATE=0`; shown on Cleanup):
+  - Every 120 s it reads qB. An incomplete torrent in an active state
+    (`downloading`, `stalledDL`, `metaDL`, forced) whose `completed` bytes
+    grew less than `STALL_MIN_PROGRESS_MB` (10) in `STALL_MINUTES` (60) is
+    removed from its Arr queue with `blocklist=true&skipRedownload=false`
+    (like `release_drop`), under `op_lock`, at most 10 per pass.
+  - Queued, stopped (disk guard, subgate) and complete torrents aren't
+    tracked; their clock restarts when they become active. A gap of more than
+    10 min between checks (laptop asleep, library down) restarts every clock.
+  - A stalled torrent that isn't in the Arr queue is logged once and left
+    alone. State: `/state/stalls.json` (`STALL_STATE`).
+  - **Fallback** (the user's call: something beats nothing). A rotation
+    records what the torrent was for (movieId, or the episodes from the queue
+    / grab history). `FALLBACK_AFTER` (10 min) later, if that's still wanted,
+    monitored and nothing is queued for it, it runs one interactive search
+    (`episodeId=` for one episode, else per season) and grabs via
+    `release_grab` the best release from `pick_fallback`: approved first, else
+    one whose rejections are all "soft" (`is_soft`: quality not wanted in
+    profile, custom format score below minimum, size limits; never language,
+    blocklist, seeders, parsing). Never CAM-type or Unknown quality, never 0
+    seeders. Rank: approved, ≥3 seeders, wanted episodes covered, resolution,
+    format score, seeders. One try per rotation; at most 2 searches a pass.
 - `http_json` pulls `message`/`errorMessage`/`title` out of Arr error bodies, so
   the UI shows the real reason.
 
@@ -366,15 +459,26 @@ Keep both paths working.
   - Queue: 5 downloads / 3 uploads / 8 active, with "don't count slow
     torrents" on, so one dead torrent can't block the queue.
   - No seeding limits.
+- **Recyclarr owns quality profiles, custom formats and quality definitions**
+  in both Arrs (daily sync; `delete_old_custom_formats` on). Change
+  `recyclarr/media.yml`, not the Arr UI, or the next sync reverts it. Sync now:
+  `docker compose exec recyclarr recyclarr sync`; dry run: `... sync --preview`
+  (details land in `config/recyclarr/logs/cli/*.debug.log`, API keys redacted).
+  Image tag is the major version (`:8`); there is no `latest`. v8 gotchas: a
+  quality group needs ≥2 qualities; groups a template lists uncommented are
+  synced by default, so dropping one means `skip:`, not leaving it out.
 - **Radarr:**
-  - Profile `HD-1080p`. It includes Remux, which is why a 21 GB REMUX with no
-    seeds once got stuck.
+  - Profile `HD Bluray + WEB` (Recyclarr; id 7): no Remux, no upgrades, x265
+    allowed (Golden Rule HD skipped), language Original. The old `HD-1080p`
+    still exists, unused.
   - Root `/data/media/movies`; hardlinks and rename on.
   - Completed download handling plus auto-redownload of failed downloads,
     including ones grabbed from interactive search.
   - qB client: remove completed/failed on.
 - **Sonarr:**
-  - Profile `HD - 720p/1080p`, also used for anime.
+  - Anime: `Anime 1080p` (Recyclarr's TRaSH `[Anime] Remux-1080p` minus Remux;
+    id 7): no upgrades, min format score 0 (TRaSH says 100, which refuses
+    unranked groups), Dubs Only 0. Other shows: `HD - 720p/1080p`.
   - Root `/data/media/tv`, season folders, rename off.
   - RSS every 10 min.
 - **Prowlarr:**
@@ -384,11 +488,24 @@ Keep both paths working.
     tagged `flaresolverr`.
 - **Seerr:**
   - Connected to Jellyfin at `jellyfin:8096`.
-  - Radarr defaults: `HD-1080p`, `/data/media/movies`, minimum availability
-    released.
-  - Sonarr defaults: `HD - 720p/1080p` (anime too), `/data/media/tv`, season
-    folders.
+  - Radarr defaults: `HD Bluray + WEB`, `/data/media/movies`, minimum
+    availability released.
+  - Sonarr defaults: `HD - 720p/1080p`, anime profile `Anime 1080p`,
+    `/data/media/tv`, season folders. `Kind.profile_and_root(anime=)` reads the
+    same fields, so the library page matches. Seerr's settings PUT rejects a
+    body containing `id`.
 - **Jellyfin:** `Movies` and `Shows` libraries with real-time monitoring.
+  - Plugin Intro Skipper (repo `https://intro-skipper.org/manifest.json`;
+    plain curl gets a GitHub page, send `User-Agent: Jellyfin-Server/<ver>`).
+    Auto-detects on new items; needs ≥2 episodes in a season. Task key
+    `IntroSkipperDetectSegmentsTask`; results via `GET /MediaSegments/{itemId}`.
+- **Bazarr:** `config/bazarr/config/config.yaml` (API key under `auth.apikey`).
+  Languages profile 1 `English` is the default for series and movies.
+  Providers without accounts: tsukihime (anime; needs only AniDB *series* ids,
+  which Bazarr maps itself), gestdown, tvsubtitles, yifysubtitles. Animetosho
+  needs an AniDB API client, so it's off. Podnapisi is gone from current
+  Bazarr. Settings API: `POST /api/system/settings` form fields
+  `settings-<section>-<key>`, header `X-API-KEY`.
 
 Check live values through the Arr APIs (`/api/v3/config/*`, header
 `X-Api-Key`) rather than trusting this list.
@@ -441,3 +558,4 @@ docker compose up -d <svc>               # after editing .env (restart does NOT 
 | Stuck download | Library → Releases dialog, or `release_drop` |
 | Title still "available" in Seerr after delete | delete via library (clears Seerr), or Seerr → Manage → Clear Data |
 | Settings changed in an app UI | update `SETUP.md` to match |
+| Change quality rules (sizes, groups, upgrades) | `recyclarr/media.yml` → `recyclarr sync --preview` → `sync`; update SETUP.md step 11 |
